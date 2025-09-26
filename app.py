@@ -1218,16 +1218,34 @@ def run_post_csv_auto_approvals(reqlog_df: pd.DataFrame, items_df: pd.DataFrame)
 
     return df, changed
 
-def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict):
+# CHANGE SIGNATURE: add key_prefix with a default to avoid breaking other calls
+def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_prefix: str = "reprint"):
+    """Renders single-ref 'View' and 'Print' block (Admin/My Requests)."""
+    if df_filtered := reqlog_df:
+        pass  # keep exact logic; just add keys below
+
     if reqlog_df.empty:
         st.caption("Registry is empty.")
         return
-    df = ensure_registry_columns(reqlog_df)
-    refs = st.multiselect("Select Reference(s) to reprint", df["ref"].astype(str).tolist(), default=[])
-    if refs and st.button("🖨️ Build PDF for selected", type="primary"):
-        rows = df[df["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
+
+    # ✅ Add a unique key to avoid collisions when called from multiple places
+    refs = st.multiselect(
+        "Select Reference(s) to reprint",
+        reqlog_df["ref"].astype(str).tolist(),
+        default=[],
+        key=f"{key_prefix}-refs"
+    )
+    if refs and st.button("🖨️ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
+        rows = reqlog_df[reqlog_df["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
         pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta)
-        st.download_button("Download PDF (selected refs)", data=pdf_bytes, file_name="requirements_reprint.pdf", mime="application/pdf")
+        st.download_button(
+            "Download PDF (selected refs)",
+            data=pdf_bytes,
+            file_name="requirements_reprint.pdf",
+            mime="application/pdf",
+            key=f"{key_prefix}-dl",
+        )
+
 
 def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company_meta: Dict):
     st.subheader("My Requests & Logs")
@@ -1244,7 +1262,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
     if status_pick: mine = mine[mine["status"].isin(status_pick)]
     if vendor_pick: mine = mine[mine["vendor"].isin(vendor_pick)]
     st.dataframe(mine.sort_values("generated_at", ascending=False), use_container_width=True, hide_index=True)
-    render_reprint_section(st, mine, company_meta)
+    render_reprint_section(st, mine, company_meta, key_prefix="myreq-reprint")
 
 def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
     """Builds a lightweight HTML preview that mirrors the PDF content for a single requirement row."""
