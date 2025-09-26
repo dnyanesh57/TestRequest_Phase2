@@ -197,18 +197,59 @@ def _col_width(col: str) -> int:
         return _BASE_WIDTHS[col]
     return _DEFAULT_NUM_W if _is_numeric_col(col) else _DEFAULT_TEXT_W
 def _ensure_acl_in_state():
-    if "acl_df" not in st.session_state:
+    if "acl_df" in st.session_state:
+        return
+
+    df = pd.DataFrame()
+
+    # 1) Try DB first
+    try:
+        from db_adapter import read_acl_df, write_acl_df  # already in your repo
         df = read_acl_df()
-        if df.empty:
-            import pandas as pd
-            df = pd.DataFrame([{
-                "email":"admin@sjcpl.local","name":"Admin","role":"master_admin",
-                "sites":"*","tabs":"*","can_raise":True,"can_view_registry":True,
-                "can_export":True,"can_email_drafts":True,
-                "password_hash":_sha256_hex("admin")
-            }])
+    except Exception:
+        df = pd.DataFrame()  # swallow connection/operational errors and fall back
+
+    # 2) Fall back to local CSV
+    if df is None or df.empty:
+        try:
+            df = _load_csv_safe(ACL_FILE_NAME)
+        except Exception:
+            df = pd.DataFrame()
+
+    # 3) Bootstrap default admin if still empty
+    if df is None or df.empty:
+        df = pd.DataFrame([{
+            "email": "admin@sjcpl.local",
+            "name": "Admin",
+            "role": "master_admin",   # matches your current default
+            "sites": "*",
+            "tabs": "*",
+            "can_raise": True,
+            "can_view_registry": True,
+            "can_export": True,
+            "can_email_drafts": True,
+            "password_hash": _sha256_hex("admin"),  # SHA256("admin")
+        }])
+        # Try to persist bootstrap to DB and CSV (best-effort)
+        try:
             write_acl_df(df)
-        st.session_state.acl_df = df
+        except Exception:
+            pass
+        try:
+            _save_csv_safe(df, ACL_FILE_NAME)
+        except Exception:
+            pass
+
+    # 4) Backfill/normalize columns & types (keeps your compare logic)
+    for c in ["can_raise", "can_view_registry", "can_export", "can_email_drafts"]:
+        if c not in df.columns:
+            df[c] = True
+        df[c] = df[c].fillna(True).astype(bool)
+    if "password_hash" not in df.columns or df["password_hash"].isna().any():
+        df["password_hash"] = df.get("password_hash").fillna(_sha256_hex("admin"))
+
+    st.session_state.acl_df = df
+
 def _build_width_map(header_cols: list[str]) -> dict[str,int]:
     return {c: _col_width(c) for c in header_cols}
 
