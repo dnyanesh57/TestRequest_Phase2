@@ -1351,7 +1351,7 @@ def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.Data
             save_cb(upd)
             st.success(f"Auto-approved {n} record(s) where stock is now available.")
     with c2:
-        render_reprint_section(st, reqlog_df, company_meta)
+        render_reprint_section(st, reqlog_df, company_meta, key_prefix="admin-reprint")
 
 # ===== UI =====
 brand_header()
