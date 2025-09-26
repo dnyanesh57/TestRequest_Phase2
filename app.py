@@ -2316,3 +2316,6 @@ for i, tab_label in enumerate(visible_tabs):
                     _save_enabled_tabs(enabled_sel)
                     st.success("Enabled tabs updated.")
                     st.rerun()
+
+
+st.caption("© SJCPL-Test Request and Approvals — V1")
