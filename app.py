@@ -403,7 +403,8 @@ def pdf_grouped_lines(
     return buf.getvalue()
 def _ensure_reqlog_in_state():
     if "reqlog_df" not in st.session_state:
-        st.session_state.reqlog_df = read_reqlog_df()
+        df = read_reqlog_df()  # <- DB, not CSV
+        st.session_state.reqlog_df = ensure_registry_columns(df)
 
 def _load_enabled_tabs():
     t = read_enabled_tabs()
@@ -1940,10 +1941,14 @@ for i, tab_label in enumerate(visible_tabs):
                                 reqlog_df=st.session_state.reqlog_df,
                                 items_df=items_f,
                                 company_meta=st.session_state.company_meta,
- req_hash_salt=REQ_HASH_SALT
+                                req_hash_salt=REQ_HASH_SALT
                             )
                             st.session_state.reqlog_df = updated_df
-                            _save_csv_safe(st.session_state.reqlog_df, REQ_LOG_NAME)
+                            # Persist to DB
+                            write_reqlog_df(updated_df)
+
+                            # (optional but recommended) refresh from DB to keep ordering consistent
+                            st.session_state.reqlog_df = read_reqlog_df()
 
                             if pdf_bytes and used_rows:
                                 first_entry = used_rows[0]
