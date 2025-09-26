@@ -54,11 +54,24 @@ div.stButton>button, .stDownloadButton>button {
 </style>
 """, unsafe_allow_html=True)
 
+
+
+DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
+DEFAULT_GH_FOLDER = "data"                           # folder inside repo
+DEFAULT_GH_BRANCH = "master" 
 def brand_header():
     st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">Phase-1 + Phase-2: RBAC • Requirements • Approvals • Brand PDFs • Exports</div>', unsafe_allow_html=True)
     st.markdown('<hr class="brand" />', unsafe_allow_html=True)
 
+
+if "app_settings" not in st.session_state:
+    st.session_state.app_settings = {
+        "data_source": "github",          # 'github' by default (local upload disabled unless admin changes)
+        "github_repo": DEFAULT_GH_REPO,
+        "github_folder": DEFAULT_GH_FOLDER,
+        "github_branch": DEFAULT_GH_BRANCH,
+    }
 # Show logged-in user at the top-right of the app
 u = st.session_state.get("user", {})
 st.markdown(f"<div style='text-align:right;color:#555;font-size:12px'>"\
@@ -72,6 +85,10 @@ REQ_HASH_SALT    = os.getenv("REQ_HASH_SALT", "SJCPL-PHASE2-HASH-SALT")
 REQ_LOG_NAME     = "requirements_log.csv"
 ACL_FILE_NAME    = "acl_users.csv"
 ENABLED_TABS_FILE = "enabled_tabs.json"
+
+DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
+DEFAULT_GH_FOLDER = "data"                           # folder inside repo
+DEFAULT_GH_BRANCH = "master" 
 
 # --- NEW: Configuration for Automatic File Loading ---
 LOCAL_DATA_PATH = "data" # Create a folder named 'data' in the same directory as the script
@@ -635,58 +652,113 @@ def get_most_recent_file(directory: str) -> str | None:
     except Exception:
         return None
 # --- GitHub data helpers ---
+# --- GitHub data helpers (improved diagnostics + raw fallback) ---
 def _gh_headers():
     tok = (st.secrets.get("github", {}) or {}).get("token")
-    h = {"Accept": "application/vnd.github+json"}
+    h = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "SJCPL-WO-Dashboard",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
     if tok:
         h["Authorization"] = f"Bearer {tok}"
     return h
 
 def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
-    url = f"https://api.github.com/repos/{repo}/contents/{folder}?ref={branch}"
-    r = requests.get(url, headers=_gh_headers(), timeout=15); r.raise_for_status()
-    return [x for x in r.json() if x.get("type") == "file" and x["name"].lower().endswith((".csv",".xlsx",".xls"))]
+    """
+    Lists CSV/XLSX files under the given folder via GitHub Contents API.
+    Raises with a descriptive error if anything goes wrong.
+    """
+    url = f"https://api.github.com/repos/{repo}/contents/{folder}"
+    try:
+        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20)
+        if r.status_code != 200:
+            # Bubble up readable diagnostics in UI
+            try:
+                detail = r.json().get("message", "")
+            except Exception:
+                detail = r.text[:200]
+            raise RuntimeError(f"GitHub list error {r.status_code}: {detail} (repo={repo}, folder={folder}, branch={branch})")
+        data = r.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected response for contents list: {type(data)}")
+        return [x for x in data if x.get("type") == "file" and x["name"].lower().endswith((".csv",".xlsx",".xls"))]
+    except Exception as e:
+        raise RuntimeError(f"Failed to list GitHub folder: {e}") from e
 
 def gh_last_commit_iso(repo: str, path: str, branch: str) -> str:
     url = f"https://api.github.com/repos/{repo}/commits"
-    r = requests.get(url, headers=_gh_headers(),
-                     params={"path": path, "sha": branch, "per_page": 1}, timeout=15)
-    r.raise_for_status()
+    r = requests.get(url, headers=_gh_headers(), params={"path": path, "sha": branch, "per_page": 1}, timeout=20)
+    if r.status_code != 200:
+        return ""
     js = r.json()
-    return js[0]["commit"]["committer"]["date"] if js else ""
+    try:
+        return js[0]["commit"]["committer"]["date"]
+    except Exception:
+        return ""
 
 def gh_pick_latest(repo: str, folder: str, branch: str) -> dict|None:
-    try:
-        items = gh_list_folder(repo, folder, branch)
-        if not items: return None
-        enriched = []
-        for it in items:
-            it["_last"] = gh_last_commit_iso(repo, f"{folder}/{it['name']}", branch)
-            enriched.append(it)
-        enriched.sort(key=lambda x: (x.get("_last") or "", x["name"]), reverse=True)
-        return enriched[0]
-    except Exception:
+    items = gh_list_folder(repo, folder, branch)
+    if not items:
         return None
+    enriched = []
+    for it in items:
+        it["_last"] = gh_last_commit_iso(repo, f"{folder}/{it['name']}", branch)
+        enriched.append(it)
+    enriched.sort(key=lambda x: (x.get("_last") or "", x["name"]), reverse=True)
+    return enriched[0]
 
 def gh_download(download_url: str) -> bytes:
-    r = requests.get(download_url, headers=_gh_headers(), timeout=30); r.raise_for_status()
+    r = requests.get(download_url, headers=_gh_headers(), timeout=40)
+    if r.status_code != 200:
+        try:
+            detail = r.json().get("message", "")
+        except Exception:
+            detail = r.text[:200]
+        raise RuntimeError(f"GitHub download error {r.status_code}: {detail}")
     return r.content
 
 def load_table_from_bytes(data: bytes, filename: str) -> pd.DataFrame:
     name = filename.lower(); bio = io.BytesIO(data); bio.name = filename
     try:
         if name.endswith(".csv"):
+            # If your CSVs do NOT have two junk rows at the top, change skiprows=2 -> 0
             return pd.read_csv(bio, encoding="latin1", engine="python", skiprows=2)
         return pd.read_excel(bio, skiprows=2, engine="openpyxl")
     except Exception as e:
-        st.error(f"GitHub load error: {e}")
+        st.error(f"GitHub file parse error for {filename}: {e}")
         return pd.DataFrame()
 
+def _raw_url(repo: str, branch: str, path: str) -> str:
+    return f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+
 def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd.DataFrame, str]:
-    meta = gh_pick_latest(repo, folder, branch)
-    if not meta: return (pd.DataFrame(), "No CSV/XLSX found in GitHub folder")
-    raw = gh_download(meta["download_url"])
-    return (load_table_from_bytes(raw, meta["name"]), f"GitHub: {meta['name']}")
+    """
+    1) Use Contents API to find most-recent CSV/XLSX by last commit.
+    2) Download via the provided 'download_url'.
+    3) If listing fails, try raw.githubusercontent.com with common names.
+    """
+    try:
+        meta = gh_pick_latest(repo, folder, branch)
+        if meta:
+            raw = gh_download(meta["download_url"])
+            return (load_table_from_bytes(raw, meta["name"]), f"GitHub: {meta['name']}")
+        # No CSV/XLSX in the folder
+        raise RuntimeError(f"No CSV/XLSX found in '{folder}' on branch '{branch}'.")
+    except Exception as e:
+        # Fallback: raw URL with common names (helps when Contents API is rate-limited)
+        common_names = ["work_orders.csv", "wo.csv", "data.csv", "items.csv", "work_orders.xlsx", "wo.xlsx"]
+        for fname in common_names:
+            try:
+                url = _raw_url(repo, branch, f"{folder.rstrip('/')}/{fname}")
+                r = requests.get(url, headers={"User-Agent":"SJCPL-WO-Dashboard"}, timeout=20)
+                if r.status_code == 200:
+                    return (load_table_from_bytes(r.content, fname), f"GitHub (raw): {fname}")
+            except Exception:
+                pass
+        # Surface the real reason
+        st.error(f"GitHub load failed: {e}")
+        return (pd.DataFrame(), "")
 
 # ---------------------- Load ----------------------
 def load_table(upload) -> pd.DataFrame:
@@ -1426,37 +1498,49 @@ _login_block()
 with st.sidebar:
     st.header("Data Source")
 
-    S = st.session_state.app_settings
-    raw_df = pd.DataFrame()
-    source_lbl = ""
+    S = st.session_state.app_settings  # shorthand
 
-    if S.get("use_github", True):
-        st.caption("🔒 Source is locked to GitHub by Admin.")
-        if st.button("Load latest from GitHub", key="gh-load-latest"):
-            df_git, src = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
-            if not df_git.empty:
-                st.session_state["_df_from_github"] = (df_git, src)
-                st.success(f"Loaded {src}")
-            else:
-                st.error("Could not load latest file from GitHub.")
-        # Auto-load once if nothing in session yet
-        if "_df_from_github" not in st.session_state:
-            df_git, src = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
-            if not df_git.empty:
-                st.session_state["_df_from_github"] = (df_git, src)
-                st.info(f"Auto-loaded {src}")
+    # Only master admin can switch away from GitHub
+    if _user_is_master_admin():
+        source = st.radio("Choose data source", ["GitHub (default)", "Manual upload"], index=(0 if S["data_source"]=="github" else 1))
+        S["data_source"] = "github" if "GitHub" in source else "upload"
+
+        # Allow admin to tweak GH path (optional)
+        with st.expander("GitHub settings", expanded=False):
+            S["github_repo"]   = st.text_input("owner/repo", S["github_repo"])
+            S["github_folder"] = st.text_input("folder (case-sensitive)", S["github_folder"])
+            S["github_branch"] = st.text_input("branch", S["github_branch"])
+            st.caption("If the repo is private or you hit rate-limits, add [github].token to secrets.")
+
     else:
-        upl = st.file_uploader("Upload Work Order (.csv / .xlsx)", type=["csv","xlsx","xls"], key="u1")
-        if upl is not None:
-            raw_df = load_table(upl); source_lbl = f"Uploaded: {upl.name}"
-        st.markdown("— or —")
-        if st.button("Load latest from GitHub (optional)", key="gh-load-opt"):
-            df_git, src = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
-            if not df_git.empty:
-                st.session_state["_df_from_github"] = (df_git, src)
-                st.success(f"Loaded {src}")
-            else:
-                st.error("GitHub load failed.")
+        # Non-admins are locked to GitHub
+        st.write("Using: **GitHub**")
+        st.caption(f"{S['github_repo']} — {S['github_branch']} — /{S['github_folder']}")
+        S["data_source"] = "github"
+
+    st.markdown("---")
+
+    # --- Load the data according to chosen source ---
+    gh_status = ""
+    upl = None
+
+    if S["data_source"] == "github":
+        items_note = ""
+        # Use the helper you already have: try_load_latest_from_github(repo, folder, branch)
+        gh_df, gh_status = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
+        if gh_df.empty:
+            st.error("Could not load latest file from GitHub.")
+            st.caption(f"Repo: {S['github_repo']} | Branch: {S['github_branch']} | Folder: {S['github_folder']}")
+        else:
+            st.success(f"Loaded from {gh_status}")
+        raw_df = gh_df
+
+    else:
+        # Manual upload path (admin-only)
+        upl = st.file_uploader("Upload Work Order file (.csv or .xlsx)", type=["csv","xlsx","xls"], key="u1")
+        raw_df = load_table(upl) if upl else pd.DataFrame()
+        if upl and raw_df.empty:
+            st.error("Loaded 0 rows. Check header row/format.")
 
     # Display & Alerts (moved here so it stays in sidebar)
     st.markdown("---")
@@ -1486,7 +1570,22 @@ if _user_is_master_admin():
             st.session_state.app_settings = read_app_settings()
             st.success("Data source settings saved.")
             st.rerun()
-            
+    with st.sidebar.expander("🔎 GitHub Diagnostics", expanded=False):
+        S = st.session_state.app_settings
+        if st.button("Test GitHub connection", key="gh-test"):
+            try:
+                files = gh_list_folder(S["github_repo"], S["github_folder"], S["github_branch"])
+                if not files:
+                    st.warning("Connected, but no CSV/XLSX files found in that folder/branch.")
+                else:
+                    names = [f["name"] for f in files]
+                    st.success("Connected. Found files:")
+                    st.write(names)
+            except Exception as e:
+                st.error(str(e))
+        st.caption(f"Repo: {S.get('github_repo')} | Branch: {S.get('github_branch')} | Folder: {S.get('github_folder')}")
+        st.caption("If the repo is private or you hit rate-limits, add [github].token to secrets.")
+        
 if "_df_from_github" in st.session_state:
     raw_df, source_lbl = st.session_state["_df_from_github"]
 else:
