@@ -30,7 +30,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 
 # ----------------------------- Brand / Theme -----------------------------
-APP_TITLE = "SJCPL — Test Request and Approval (Phase 1 + 2)"
+APP_TITLE = "SJCPL — Test Request and Approval V1"
 BRAND_BLUE = "#00AEDA"; BRAND_BLACK = "#000000"; BRAND_GREY = "#939598"; BRAND_WHITE = "#FFFFFF"
 PLOTLY_COLORS = [BRAND_BLUE, BRAND_BLACK, BRAND_GREY, "#146C94", "#4A4A4A"]
 
