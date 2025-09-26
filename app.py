@@ -1220,23 +1220,22 @@ def run_post_csv_auto_approvals(reqlog_df: pd.DataFrame, items_df: pd.DataFrame)
 
 # CHANGE SIGNATURE: add key_prefix with a default to avoid breaking other calls
 def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_prefix: str = "reprint"):
-    """Renders single-ref 'View' and 'Print' block (Admin/My Requests)."""
-    if df_filtered := reqlog_df:
-        pass  # keep exact logic; just add keys below
-
-    if reqlog_df.empty:
+    # Guard: empty / missing frame
+    if not isinstance(reqlog_df, pd.DataFrame) or reqlog_df.empty:
         st.caption("Registry is empty.")
         return
 
-    # ✅ Add a unique key to avoid collisions when called from multiple places
+    df_filtered = reqlog_df  # (no boolean checks on a DataFrame)
+
     refs = st.multiselect(
         "Select Reference(s) to reprint",
-        reqlog_df["ref"].astype(str).tolist(),
+        df_filtered["ref"].astype(str).tolist(),
         default=[],
         key=f"{key_prefix}-refs"
     )
+
     if refs and st.button("🖨️ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
-        rows = reqlog_df[reqlog_df["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
+        rows = df_filtered[df_filtered["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
         pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta)
         st.download_button(
             "Download PDF (selected refs)",
@@ -1245,6 +1244,7 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
             mime="application/pdf",
             key=f"{key_prefix}-dl",
         )
+
 
 
 def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company_meta: Dict):
