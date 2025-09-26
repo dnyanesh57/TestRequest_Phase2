@@ -74,7 +74,7 @@ ENABLED_TABS_FILE = "enabled_tabs.json"
 
 # --- NEW: Configuration for Automatic File Loading ---
 LOCAL_DATA_PATH = "data" # Create a folder named 'data' in the same directory as the script
-GITHUB_API_URL = "https://api.github.com/repos/dnyanesh57/NC_Dashboard/contents/data" # Example: User's public repo
+GITHUB_API_URL = "https://api.github.com/repos/dnyanesh57/TestRequest_Phase2/contents/data" # Example: User's public repo
 
 # ===== Company identity (no embedded logo) =====
 COMPANY_DEFAULT = {
