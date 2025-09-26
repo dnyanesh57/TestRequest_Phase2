@@ -1,7 +1,10 @@
 # wo_phase2_dashboard_sjcpl.py
 # SJCPL — Work Order Dashboard (Phase 1 + Phase 2) — Integrated Engine
 # Final, Complete, and Functional Version
-
+from __future__ import annotations
+import io, os, uuid, hmac, hashlib, json, base64
+import datetime as dt
+from typing import Dict, List, Sequence, Tuple, Optional
 from db_adapter import (
     read_acl_df, write_acl_df,
     read_reqlog_df, write_reqlog_df,
@@ -9,12 +12,6 @@ from db_adapter import (
     read_company_meta, write_company_meta,
     upsert_requirements
 )
-
-from __future__ import annotations
-import io, os, uuid, hmac, hashlib, json, base64
-import datetime as dt
-from typing import Dict, List, Sequence, Tuple, Optional
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
