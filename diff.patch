@@ -1,0 +1,62 @@
+*** Minimal search/replace guide (manually apply in your wo_phase2_dashboard_sjcpl.py) ***
+
+1) Add imports near your other imports:
+----------------------------------------------------------------
+from db_adapter import (
+    read_acl_df, write_acl_df,
+    read_reqlog_df, write_reqlog_df,
+    read_enabled_tabs, write_enabled_tabs,
+    read_company_meta, write_company_meta,
+    upsert_requirements
+)
+----------------------------------------------------------------
+
+2) Replace ACL bootstrap:
+----------------------------------------------------------------
+def _ensure_acl_in_state():
+    if "acl_df" not in st.session_state:
+        df = read_acl_df()
+        if df.empty:
+            import pandas as pd
+            df = pd.DataFrame([{
+                "email":"admin@sjcpl.local","name":"Admin","role":"master_admin",
+                "sites":"*","tabs":"*","can_raise":True,"can_view_registry":True,
+                "can_export":True,"can_email_drafts":True,
+                "password_hash":_sha256_hex("admin")
+            }])
+            write_acl_df(df)
+        st.session_state.acl_df = df
+----------------------------------------------------------------
+
+3) Replace request log loader:
+----------------------------------------------------------------
+def _ensure_reqlog_in_state():
+    if "reqlog_df" not in st.session_state:
+        st.session_state.reqlog_df = read_reqlog_df()
+----------------------------------------------------------------
+
+4) Replace all writes to CSV/JSON for registry/tabs:
+----------------------------------------------------------------
+# registry save
+write_reqlog_df(st.session_state.reqlog_df)
+
+# enabled tabs
+def _save_enabled_tabs(lst):
+    write_enabled_tabs(lst)
+----------------------------------------------------------------
+
+5) Load enabled tabs from DB at startup:
+----------------------------------------------------------------
+def _load_enabled_tabs():
+    t = read_enabled_tabs()
+    return t if t else ["Overview","Group: WO → Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
+----------------------------------------------------------------
+
+6) Company meta (optional):
+----------------------------------------------------------------
+# at startup
+st.session_state.company_meta = (read_company_meta() or COMPANY_DEFAULT.copy())
+
+# on Admin Apply
+write_company_meta(name, addr1, addr2)
+----------------------------------------------------------------
