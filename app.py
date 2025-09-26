@@ -1942,13 +1942,18 @@ for i, tab_label in enumerate(visible_tabs):
                                 items_df=items_f,
                                 company_meta=st.session_state.company_meta,
                                 req_hash_salt=REQ_HASH_SALT
-                            )
-                            st.session_state.reqlog_df = updated_df
-                            # Persist to DB
-                            write_reqlog_df(updated_df)
+                            )   
 
-                            # (optional but recommended) refresh from DB to keep ordering consistent
-                            st.session_state.reqlog_df = read_reqlog_df()
+                            # Persist rows one-by-one using UPSERT on ref
+                            if used_rows:
+                                try:
+                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE …
+                                    # refresh from DB so the grid shows the authoritative data
+                                    st.session_state.reqlog_df = read_reqlog_df()
+                                except Exception as e:
+                                    st.error(f"Failed to upsert requirements: {e}")
+                            else:
+                                st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
 
                             if pdf_bytes and used_rows:
                                 first_entry = used_rows[0]
