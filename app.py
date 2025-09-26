@@ -18,6 +18,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import urllib.request
+import urllib.error
 
 # PDF (pure-Python)
 from reportlab.lib.pagesizes import A4, landscape
@@ -59,6 +61,14 @@ div.stButton>button, .stDownloadButton>button {
 DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
 DEFAULT_GH_FOLDER = "data"                           # folder inside repo
 DEFAULT_GH_BRANCH = "master" 
+
+GITHUB_TOKEN = None
+try:
+    GITHUB_TOKEN = st.secrets.get("github", {}).get("token")
+except Exception:
+    pass
+if not GITHUB_TOKEN:
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 def brand_header():
     st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">Phase-1 + Phase-2: RBAC • Requirements • Approvals • Brand PDFs • Exports</div>', unsafe_allow_html=True)
@@ -683,8 +693,11 @@ def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
         if not isinstance(data, list):
             raise RuntimeError(f"Unexpected response for contents list: {type(data)}")
         return [x for x in data if x.get("type") == "file" and x["name"].lower().endswith((".csv",".xlsx",".xls"))]
-    except Exception as e:
-        raise RuntimeError(f"Failed to list GitHub folder: {e}") from e
+    except RuntimeError as e:
+        if "API rate limit exceeded" in str(e):
+            st.error("GitHub API rate limit exceeded. Please add a GitHub token to your secrets to increase the rate limit.")
+            st.info("1. Create a file named `.streamlit/secrets.toml` in your project directory.\n2. Add the following content to the file:\n```toml\n[github]\ntoken = \"YOUR_GITHUB_TOKEN\"\n```\n3. Replace `YOUR_GITHUB_TOKEN` with a GitHub personal access token.")
+        raise e
 
 def gh_last_commit_iso(repo: str, path: str, branch: str) -> str:
     url = f"https://api.github.com/repos/{repo}/commits"
@@ -1610,9 +1623,16 @@ if _user_is_master_admin() or _user_is_site_admin():
     with c2: f_subs     = st.multiselect("Vendor(s) — Global", subs, default=subs, key="f_sub")
     with c3: f_wos      = st.multiselect("Work Order(s)", wos, default=[], key="f_wo")
 else:
-    f_projects = []
-    f_subs = []
-    f_wos = []
+    user_sites = _user_allowed_sites()
+    if "*" in user_sites:
+        f_projects = projects
+        f_subs = subs
+        f_wos = wos
+    else:
+        f_projects = user_sites
+        project_items = items_df[items_df["Project_Key"].isin(f_projects)]
+        f_subs = sorted(project_items["Subcontractor_Key"].dropna().unique())
+        f_wos = sorted(project_items["WO_Key"].dropna().unique())
 
 mask = (
     items_df["Project_Key"].isin(f_projects) &
