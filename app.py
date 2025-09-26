@@ -71,7 +71,7 @@ if not GITHUB_TOKEN:
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 def brand_header():
     st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtle">Phase-1 + Phase-2: RBAC • Requirements • Approvals • Brand PDFs • Exports</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
     st.markdown('<hr class="brand" />', unsafe_allow_html=True)
 
 
