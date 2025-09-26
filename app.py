@@ -2,7 +2,7 @@
 # SJCPL — Work Order Dashboard (Phase 1 + Phase 2) — Integrated Engine
 # Final, Complete, and Functional Version
 from __future__ import annotations
-import io, os, uuid, hmac, hashlib, json, base64
+import io, os, uuid, hmac, hashlib, json, base64,requests
 import datetime as dt
 from typing import Dict, List, Sequence, Tuple, Optional
 from db_adapter import (
@@ -10,7 +10,8 @@ from db_adapter import (
     read_reqlog_df, write_reqlog_df,
     read_enabled_tabs, write_enabled_tabs,
     read_company_meta, write_company_meta,
-    upsert_requirements
+    upsert_requirements,
+    read_app_settings, write_app_settings,   # NEW
 )
 import numpy as np
 import pandas as pd
@@ -633,6 +634,59 @@ def get_most_recent_file(directory: str) -> str | None:
         return max(files, key=os.path.getmtime)
     except Exception:
         return None
+# --- GitHub data helpers ---
+def _gh_headers():
+    tok = (st.secrets.get("github", {}) or {}).get("token")
+    h = {"Accept": "application/vnd.github+json"}
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
+    return h
+
+def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
+    url = f"https://api.github.com/repos/{repo}/contents/{folder}?ref={branch}"
+    r = requests.get(url, headers=_gh_headers(), timeout=15); r.raise_for_status()
+    return [x for x in r.json() if x.get("type") == "file" and x["name"].lower().endswith((".csv",".xlsx",".xls"))]
+
+def gh_last_commit_iso(repo: str, path: str, branch: str) -> str:
+    url = f"https://api.github.com/repos/{repo}/commits"
+    r = requests.get(url, headers=_gh_headers(),
+                     params={"path": path, "sha": branch, "per_page": 1}, timeout=15)
+    r.raise_for_status()
+    js = r.json()
+    return js[0]["commit"]["committer"]["date"] if js else ""
+
+def gh_pick_latest(repo: str, folder: str, branch: str) -> dict|None:
+    try:
+        items = gh_list_folder(repo, folder, branch)
+        if not items: return None
+        enriched = []
+        for it in items:
+            it["_last"] = gh_last_commit_iso(repo, f"{folder}/{it['name']}", branch)
+            enriched.append(it)
+        enriched.sort(key=lambda x: (x.get("_last") or "", x["name"]), reverse=True)
+        return enriched[0]
+    except Exception:
+        return None
+
+def gh_download(download_url: str) -> bytes:
+    r = requests.get(download_url, headers=_gh_headers(), timeout=30); r.raise_for_status()
+    return r.content
+
+def load_table_from_bytes(data: bytes, filename: str) -> pd.DataFrame:
+    name = filename.lower(); bio = io.BytesIO(data); bio.name = filename
+    try:
+        if name.endswith(".csv"):
+            return pd.read_csv(bio, encoding="latin1", engine="python", skiprows=2)
+        return pd.read_excel(bio, skiprows=2, engine="openpyxl")
+    except Exception as e:
+        st.error(f"GitHub load error: {e}")
+        return pd.DataFrame()
+
+def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd.DataFrame, str]:
+    meta = gh_pick_latest(repo, folder, branch)
+    if not meta: return (pd.DataFrame(), "No CSV/XLSX found in GitHub folder")
+    raw = gh_download(meta["download_url"])
+    return (load_table_from_bytes(raw, meta["name"]), f"GitHub: {meta['name']}")
 
 # ---------------------- Load ----------------------
 def load_table(upload) -> pd.DataFrame:
@@ -1362,28 +1416,54 @@ if "company_meta" not in st.session_state:
     st.session_state.company_meta = COMPANY_DEFAULT.copy()
 if "company_logo" not in st.session_state:
     st.session_state.company_logo = None
-
+# Persisted app settings (GitHub lock, location)
+if "app_settings" not in st.session_state:
+    st.session_state.app_settings = read_app_settings()
 _ensure_reqlog_in_state()
 _login_block()
 
 # Sidebar — Upload + Display + Branding
 with st.sidebar:
-    st.header("Upload")
-    if st.button("Load Most Recent File"):
-        data_dir = os.path.join(os.path.dirname(__file__), "..", "data")
-        recent_file = get_most_recent_file(data_dir)
-        if recent_file:
-            with open(recent_file, "rb") as f:
-                upl = st.file_uploader("Upload Work Order file (.csv or .xlsx)", type=["csv","xlsx","xls"], key="u1", value=f)
-        else:
-            st.warning("No files found in data directory.")
+    st.header("Data Source")
 
-    upl = st.file_uploader("Upload Work Order file (.csv or .xlsx)", type=["csv","xlsx","xls"], key="u1")
+    S = st.session_state.app_settings
+    raw_df = pd.DataFrame()
+    source_lbl = ""
+
+    if S.get("use_github", True):
+        st.caption("🔒 Source is locked to GitHub by Admin.")
+        if st.button("Load latest from GitHub", key="gh-load-latest"):
+            df_git, src = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
+            if not df_git.empty:
+                st.session_state["_df_from_github"] = (df_git, src)
+                st.success(f"Loaded {src}")
+            else:
+                st.error("Could not load latest file from GitHub.")
+        # Auto-load once if nothing in session yet
+        if "_df_from_github" not in st.session_state:
+            df_git, src = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
+            if not df_git.empty:
+                st.session_state["_df_from_github"] = (df_git, src)
+                st.info(f"Auto-loaded {src}")
+    else:
+        upl = st.file_uploader("Upload Work Order (.csv / .xlsx)", type=["csv","xlsx","xls"], key="u1")
+        if upl is not None:
+            raw_df = load_table(upl); source_lbl = f"Uploaded: {upl.name}"
+        st.markdown("— or —")
+        if st.button("Load latest from GitHub (optional)", key="gh-load-opt"):
+            df_git, src = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
+            if not df_git.empty:
+                st.session_state["_df_from_github"] = (df_git, src)
+                st.success(f"Loaded {src}")
+            else:
+                st.error("GitHub load failed.")
+
+    # Display & Alerts (moved here so it stays in sidebar)
     st.markdown("---")
     st.subheader("Display & Alerts")
     low_metric = st.selectbox("Low-qty metric", ["Remaining_Qty","Revised_Qty","Initial_Qty"], index=0, key="low-metric")
     low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr")
-    
+
 if _user_is_master_admin():
     with st.sidebar.expander("🏷️ Company & Branding (Admin)"):
         name = st.text_input("Company Name", st.session_state.company_meta["name"])
@@ -1393,9 +1473,25 @@ if _user_is_master_admin():
         if st.button("Apply", key="company-apply"):
             st.session_state.company_meta = {"name":name,"address_lines":[addr1,addr2], "logo_path_or_url": logo_path}
             st.success("Brand details applied.")
+    with st.sidebar.expander("⚙️ Data Source (Admin)", expanded=False):
+        S = st.session_state.app_settings
+        use_gh = st.checkbox("Use GitHub as the ONLY data source", value=S.get("use_github", True), key="adm-use-gh")
+        repo   = st.text_input("Repo (owner/repo)", value=S.get("github_repo","dnyanesh57/NC_Dashboard"), key="adm-gh-repo")
+        branch = st.text_input("Branch", value=S.get("github_branch","main"), key="adm-gh-branch")
+        folder = st.text_input("Folder in repo", value=S.get("github_folder","data"), key="adm-gh-folder")
+        st.caption("Tip: put a token in secrets for private repos or higher rate limits: [github].token")
 
-raw_df = load_table(upl)
-if raw_df.empty and upl is not None: st.error("Loaded 0 rows. Check that header is on row 3.")
+        if st.button("Save Data Source Settings", key="adm-save-gh"):
+            write_app_settings(st.session_state["adm-use-gh"], repo.strip(), branch.strip(), folder.strip())
+            st.session_state.app_settings = read_app_settings()
+            st.success("Data source settings saved.")
+            st.rerun()
+            
+if "_df_from_github" in st.session_state:
+    raw_df, source_lbl = st.session_state["_df_from_github"]
+else:
+    # fallback (manual upload path when admin allows)
+    raw_df = raw_df  # already set in sidebar block above
 if raw_df.empty:
     st.info("Upload a file to begin. Headers expected on row 3 (skip first 2 rows)."); st.stop()
 

@@ -54,6 +54,56 @@ def df_write_replace(table: str, df: pd.DataFrame, index: bool = False):
     with _engine.begin() as cx:
         df.to_sql(table, cx, if_exists="replace", index=index)
 
+# --- App settings (persisted) ---
+def _ensure_app_settings_table():
+    with _engine.begin() as cx:
+        cx.execute(text("""
+            create table if not exists app_settings (
+              id int primary key,
+              use_github boolean not null default true,
+              github_repo text default 'dnyanesh57/NC_Dashboard',
+              github_branch text default 'main',
+              github_folder text default 'data'
+            )
+        """))
+        # seed a row if empty
+        cx.execute(text("""
+            insert into app_settings (id) values (1)
+            on conflict (id) do nothing
+        """))
+
+def read_app_settings() -> dict:
+    _ensure_app_settings_table()
+    df = df_read("select * from app_settings where id=1")
+    if df.empty:
+        return {
+            "use_github": True,
+            "github_repo": "dnyanesh57/NC_Dashboard",
+            "github_branch": "main",
+            "github_folder": "data",
+        }
+    r = df.iloc[0].to_dict()
+    return {
+        "use_github": bool(r.get("use_github", True)),
+        "github_repo": r.get("github_repo") or "dnyanesh57/NC_Dashboard",
+        "github_branch": r.get("github_branch") or "main",
+        "github_folder": r.get("github_folder") or "data",
+    }
+
+def write_app_settings(use_github: bool, repo: str, branch: str, folder: str) -> None:
+    _ensure_app_settings_table()
+    with _engine.begin() as cx:
+        cx.execute(text("""
+            insert into app_settings (id, use_github, github_repo, github_branch, github_folder)
+            values (1, :use_github, :repo, :branch, :folder)
+            on conflict (id) do update set
+              use_github = excluded.use_github,
+              github_repo = excluded.github_repo,
+              github_branch = excluded.github_branch,
+              github_folder = excluded.github_folder
+        """), dict(use_github=bool(use_github), repo=repo, branch=branch, folder=folder))
+
+
 def upsert_requirements(rows: list[dict]) -> None:
     if not rows: return
     cols = rows[0].keys()
