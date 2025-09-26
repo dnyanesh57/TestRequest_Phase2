@@ -20,6 +20,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import urllib.request
 import urllib.error
+import pytz
 
 # PDF (pure-Python)
 from reportlab.lib.pagesizes import A4, landscape
@@ -1241,7 +1242,7 @@ def generate_pdf_and_log_lines(
         reqlog_df = pd.DataFrame(columns=REQUIRED_REG_COLS)
     reqlog_df = ensure_registry_columns(reqlog_df)
 
-    now_iso = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_iso = dt.datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
     created_by = user.get("name", "User")
     email = user.get("email", "user@sjcpl.local")
 
@@ -1303,7 +1304,7 @@ def run_post_csv_auto_approvals(reqlog_df: pd.DataFrame, items_df: pd.DataFrame)
         return reqlog_df, 0
     df = ensure_registry_columns(reqlog_df).copy()
     changed = 0
-    now_iso = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_iso = dt.datetime.now(pytz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d %H:%M:%S")
 
     items = items_df.copy() if isinstance(items_df, pd.DataFrame) else pd.DataFrame()
     items["Line_Key"] = items.get("Line_Key","").astype(str)
