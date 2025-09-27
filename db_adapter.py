@@ -204,6 +204,7 @@ def read_requirements_by_refs(refs: list[str]) -> list[dict]:
 # -------------------- Existing API (unchanged logic) --------------------
 
 def df_read(sql: str, params: dict | None = None) -> pd.DataFrame: # type: ignore
+    _ensure_requirements_log_table() # Ensure table exists before reading
     with _engine.begin() as cx:
         return pd.read_sql(text(sql), cx, params=params or {})
 
@@ -262,6 +263,7 @@ def write_app_settings(use_github: bool, repo: str, branch: str, folder: str) ->
 
 
 def upsert_requirements(rows: list[dict]) -> None:
+    _ensure_requirements_log_table() # Ensure table exists before upserting
     if not rows: return
     cols = rows[0].keys()
     keys = ",".join(cols)
@@ -282,10 +284,78 @@ def upsert_requirements(rows: list[dict]) -> None:
         for r in rows:
             cx.execute(sql, r)
 def _table_exists(table_name: str) -> bool:
+    """
+    Checks if a table exists in the database.
+    """
     with _engine.connect() as connection:
         inspector = inspect(connection)
         return table_name in inspector.get_table_names()
-        
+
+def _ensure_requirements_log_table():
+    """
+    Ensures the requirements_log table exists with a UNIQUE constraint on 'ref'.
+    """
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirements_log (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ref TEXT NOT NULL UNIQUE,
+                  hash TEXT,
+                  project_code TEXT,
+                  project_name TEXT,
+                  request_type TEXT,
+                  vendor TEXT,
+                  wo TEXT,
+                  line_key TEXT,
+                  uom TEXT,
+                  stage TEXT,
+                  description TEXT,
+                  qty REAL,
+                  date_casting TEXT,
+                  date_testing TEXT,
+                  remarks TEXT,
+                  remaining_at_request REAL,
+                  approval_required BOOLEAN,
+                  approval_reason TEXT,
+                  is_new_item BOOLEAN,
+                  generated_at TEXT,
+                  generated_by_name TEXT,
+                  generated_by_email TEXT,
+                  status TEXT,
+                  approver TEXT,
+                  approved_at TEXT,
+                  idem_key TEXT,
+                  status_detail TEXT,
+                  auto_approved_at TEXT,
+                  auto_approved_by TEXT,
+                  engine_version TEXT,
+                  snap_company_name TEXT,
+                  snap_address_1 TEXT,
+                  snap_address_2 TEXT
+                )
+            """))
+            # Ensure unique index for 'ref' in SQLite if not already created inline
+            c.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_requirements_log_ref ON requirements_log(ref)"))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirements_log (
+                  id BIGSERIAL PRIMARY KEY,
+                  ref TEXT NOT NULL UNIQUE,
+                  hash TEXT, project_code TEXT, project_name TEXT, request_type TEXT, vendor TEXT, wo TEXT,
+                  line_key TEXT, uom TEXT, stage TEXT, description TEXT, qty REAL,
+                  date_casting TEXT, date_testing TEXT, remarks TEXT, remaining_at_request REAL,
+                  approval_required BOOLEAN, approval_reason TEXT, is_new_item BOOLEAN,
+                  generated_at TIMESTAMPTZ, generated_by_name TEXT, generated_by_email TEXT,
+                  status TEXT, approver TEXT, approved_at TIMESTAMPTZ,
+                  idem_key TEXT, status_detail TEXT, auto_approved_at TIMESTAMPTZ, auto_approved_by TEXT,
+                  engine_version TEXT, snap_company_name TEXT, snap_address_1 TEXT, snap_address_2 TEXT
+                )
+            """))
+
+
+
+
 def read_acl_df() -> pd.DataFrame:
     return df_read("select * from acl_users")
 
@@ -410,10 +480,12 @@ def list_approver_emails(project_code: str|None, vendor_key: str|None, request_t
         return out
 
 def read_reqlog_df() -> pd.DataFrame:
+    _ensure_requirements_log_table() # Ensure table exists before reading
     return df_read("select * from requirements_log order by generated_at desc")
 
 def write_reqlog_df(df: pd.DataFrame):
     df_write_replace("requirements_log", df, index=False)
+
 
 def read_enabled_tabs() -> list[str]:
     df = df_read("select tabs from enabled_tabs where id=1")

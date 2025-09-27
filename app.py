@@ -2497,14 +2497,16 @@ for i, tab_label in enumerate(visible_tabs):
                     )
                     note = st.text_area("Note (will be recorded into status_detail)", "", key="admin-approve-note")
 
-                    colA, colB, colC = st.columns([1,1,2])
+                    # NEW: two toggles (vendor OFF by default, requester ON)
+                    colA, colB, colC, colD = st.columns([1,1,1,2])
                     with colA:
                         do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
                     with colB:
                         do_reject = st.button("⛔ Reject", key="admin-reject-btn")
                     with colC:
-                        send_vendor_after_approve = st.checkbox("Email vendor with PDF after Approve", value=True, key="admin-send-vendor")
-
+                        send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=False, key="admin-send-vendor")
+                    with colD:
+                        send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
                     if (do_approve or do_reject) and not refs_to_act:
                         st.warning("Pick at least one reference.")
                     elif do_approve or do_reject:
@@ -2544,43 +2546,116 @@ for i, tab_label in enumerate(visible_tabs):
 
                                 sent_ok, sent_err = 0, []
                                 for vendor_key, bucket in by_vendor.items():
-                                    v_email = None
+                                    v_email = None # <-- initialize so it always exists
                                     try:
                                         v_email = get_vendor_email(vendor_key)
+                                        if not v_email:
+                                            st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
+                                            continue
+
+                                        # Subject/body — show approver & requester
+                                        approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
+                                        req_name = bucket[0].get("generated_by_name","User")
+                                        req_email = bucket[0].get("generated_by_email","")
+
+                                        subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                        body_rows = "".join(
+                                            f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                                            f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                                            f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                                            for r in bucket
+                                        )
+                                        html_body = f"""<div style="font-family:Arial,Helvetica,sans-serif;color:#222"><p><b>Approved by:</b> {approver_name} &nbsp;&nbsp; <b>Requested by:</b> {req_name}{(' &lt;'+req_email+'&gt;') if req_email else ''}</p><p>The following request(s) have been <b>Approved</b>:</p><table style="border-collapse:collapse;font-size:13px"><thead><tr style="background:#f0f0f0"><th style="padding:4px 8px;text-align:left">Ref</th><th style="padding:4px 8px;text-align:left">Item</th><th style="padding:4px 8px;text-align:left">Qty</th></tr></thead><tbody>{body_rows}</tbody></table><p>Attached: signed request PDF.</p></div>"""
+                                        attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
+                                        ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
+                                        try:
+                                            log_requirement_email(bucket[0].get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
+                                        except Exception:
+                                            pass
+                                        if ok_mail:
+                                            sent_ok += 1
+                                        else:
+                                            sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
+
                                     except Exception as e:
-                                        st.warning(f"Lookup vendor email failed for {vendor_key}: {e}")
-
-                                    if not v_email:
-                                        st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
+                                        # v_email is always defined (maybe None), so no NameError
+                                        sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
                                         continue
-
-                                    # Subject/body — show approver & requester
-                                    approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
-                                    req_name = bucket[0].get("generated_by_name","User")
-                                    req_email = bucket[0].get("generated_by_email","")
-
-                                    subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
-                                    body_rows = "".join(
-                                        f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td><td style='padding:4px 8px'>{r.get('description','')}</td>"
-                                        f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
-                                        for r in bucket
-                                    )
-                                    html_body = f"""<div style="font-family:Arial,Helvetica,sans-serif;color:#222"><p><b>Approved by:</b> {approver_name} &nbsp;&nbsp; <b>Requested by:</b> {req_name}{(' &lt;'+req_email+'&gt;') if req_email else ''}</p><p>The following request(s) have been <b>Approved</b>:</p><table style="border-collapse:collapse;font-size:13px"><thead><tr style="background:#f0f0f0"><th style="padding:4px 8px;text-align:left">Ref</th><th style="padding:4px 8px;text-align:left">Item</th><th style="padding:4px 8px;text-align:left">Qty</th></tr></thead><tbody>{body_rows}</tbody></table><p>Attached: signed request PDF.</p></div>"""
-                                    attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
-                                    ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
-                                    try:
-                                        log_requirement_email(bucket[0].get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
-                                    except Exception:
-                                        pass
-                                    if ok_mail: sent_ok += 1
-                                    else: sent_err.append(f"{vendor_key}: {msg_mail}")
 
                                 if sent_ok:
                                     st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
                                 if sent_err:
-                                    st.error("Some emails failed: " + "; ".join(sent_err))
+                                    st.error("Some vendor emails failed: " + "; ".join(sent_err))
 
-                        st.rerun()
+                                # --- (Optional) On Approve: email requester(s) with PDF ---
+                                if do_approve and send_requester_after_approve:
+                                    # Reload rows we just approved (we already had 'rows' above; reuse if available)
+                                    try:
+                                        rows_req = rows if 'rows' in locals() and rows else read_requirements_by_refs(refs_to_act)
+                                    except Exception as e:
+                                        rows_req = []
+                                        st.error(f"Could not reload rows for requester email: {e}")
+
+                                    if rows_req:
+                                        # Build one combined PDF for the approved selections (reuse already-built pdf_bytes if present)
+                                        try:
+                                            pdf_for_req = pdf_bytes if 'pdf_bytes' in locals() and pdf_bytes else build_requirement_pdf_from_rows(rows_req, st.session_state.company_meta)
+                                        except Exception as e:
+                                            pdf_for_req = b""
+                                            st.error(f"PDF build failed for requester email: {e}")
+
+                                        # Group by requester email so they get a single message
+                                        from collections import defaultdict
+                                        by_requester = defaultdict(list)
+                                        for r in rows_req:
+                                            remail = (r.get("generated_by_email") or "").strip()
+                                            if remail:
+                                                by_requester[remail].append(r)
+
+                                        if not by_requester:
+                                            st.warning("No requester email found on the selected refs.")
+                                        else:
+                                            approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
+                                            sent_ok_r, sent_err_r = 0, []
+                                            for remail, bucket in by_requester.items():
+                                                subject = f"[SJCPL] Your request was Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                                body_rows = "".join(
+                                                    f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                                                    f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                                                    f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                                                    for r in bucket
+                                                )
+                                                html_body = f"""
+                                                <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                                                  <p><b>Your request has been approved</b> by {approver_name}.</p>
+                                                  <table style="border-collapse:collapse;font-size:13px">
+                                                    <thead><tr style="background:#f0f0f0">
+                                                      <th style="padding:4px 8px;text-align:left">Ref</th>
+                                                      <th style="padding:4px 8px;text-align:left">Item</th>
+                                                      <th style="padding:4px 8px;text-align:left">Qty</th>
+                                                    </tr></thead>
+                                                    <tbody>{body_rows}</tbody>
+                                                  </table>
+                                                  <p>Attached: approved request PDF.</p>
+                                                </div>
+                                                """
+                                                attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
+                                                ok_mail, msg_mail = send_email_via_smtp(remail, subject, html_body, pdf_for_req, attach_name)
+
+                                                # Optional: log to your email log if available
+                                                try:
+                                                    log_requirement_email(bucket[0].get("ref",""), bucket[0].get("vendor",""), remail, subject, ok_mail, (None if ok_mail else msg_mail))
+                                                except Exception:
+                                                    pass
+
+                                                if ok_mail: sent_ok_r += 1
+                                                else: sent_err_r.append(f"{remail}: {msg_mail}")
+
+                                            if sent_ok_r:
+                                                st.success(f"Emailed requester(s) for {sent_ok_r} group(s).")
+                                            if sent_err_r:
+                                                st.error("Some requester emails failed: " + "; ".join(sent_err_r))
+                                st.rerun()
         elif tab_label == "Admin":
             if can_view("Admin") and _user_is_master_admin():
                 st.subheader("Admin — Users & Access")
@@ -2594,12 +2669,14 @@ for i, tab_label in enumerate(visible_tabs):
 
                     a1, a2 = st.columns(2)
                     email = a1.text_input("Email", key="admin-email")
-                    name  = a1.text_input("Name", key="admin-name")
-                    role  = a1.selectbox("Role", ["master_admin", "site_admin", "user"], key="admin-role")
+                    name = a1.text_input("Name", key="admin-name")
+                    role = a1.selectbox("Role", ["master_admin", "site_admin", "user"], key="admin-role")
 
                     fast_col1, fast_col2 = st.columns([1,1])
-                    with fast_col1: sites_quick = st.selectbox("Quick pick sites", ["Custom", "All Sites", "None", "Matches keyword"], index=0, key="admin-sites-quick")
-                    with fast_col2: sites_keyword = st.text_input("Keyword (for Matches)", "", key="admin-sites-keyword")
+                    with fast_col1:
+                        sites_quick = st.selectbox("Quick pick sites", ["Custom", "All Sites", "None", "Matches keyword"], index=0, key="admin-sites-quick")
+                    with fast_col2:
+                        sites_keyword = st.text_input("Keyword (for Matches)", "", key="admin-sites-keyword")
 
                     sites_multi = a2.multiselect("Sites (choose one or more, or * for all)", site_choices, default=["*"] if "*" in site_choices else [], key="admin-sites")
                     tabs_multi  = a2.multiselect("Tabs (choose one or more, or * for all)", tab_choices, default=["*"], key="admin-tabs")
@@ -2617,8 +2694,10 @@ for i, tab_label in enumerate(visible_tabs):
                             ph = _sha256_hex(pwd) if pwd else None
                             dfu = st.session_state.acl_df.copy()
 
-                            if sites_quick == "All Sites": sites_val = "*"
-                            elif sites_quick == "None": sites_val = ""
+                            if sites_quick == "All Sites":
+                                sites_val = "*"
+                            elif sites_quick == "None":
+                                sites_val = ""
                             elif sites_quick == "Matches keyword":
                                 if sites_keyword.strip():
                                     matches = [s for s in available_sites if sites_keyword.strip().lower() in str(s).lower()]
@@ -2631,7 +2710,8 @@ for i, tab_label in enumerate(visible_tabs):
                             tabs_val = "*" if "*" in tabs_multi else "|".join(tabs_multi)
 
                             if (dfu["email"] == email).any():
-                                if name:  dfu.loc[dfu["email"] == email, "name"] = name
+                                if name:
+                                    dfu.loc[dfu["email"] == email, "name"] = name
                                 dfu.loc[dfu["email"] == email, "role"]  = role
                                 dfu.loc[dfu["email"] == email, "sites"] = sites_val
                                 dfu.loc[dfu["email"] == email, "tabs"]  = tabs_val
@@ -2639,7 +2719,8 @@ for i, tab_label in enumerate(visible_tabs):
                                 dfu.loc[dfu["email"] == email, "can_view_registry"] = bool(can_view_registry)
                                 dfu.loc[dfu["email"] == email, "can_export"] = bool(can_export)
                                 dfu.loc[dfu["email"] == email, "can_email_drafts"] = bool(can_email_drafts)
-                                if ph: dfu.loc[dfu["email"] == email, "password_hash"] = ph
+                                if ph:
+                                    dfu.loc[dfu["email"] == email, "password_hash"] = ph
                             else:
                                 if not ph:
                                     st.error("Password required for new user.")
@@ -2647,7 +2728,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 new_user_data = {
                                     "email": email, "name": name, "role": role, "sites": sites_val,
                                     "tabs": tabs_val, "can_raise": bool(can_raise),
-                                    "can_view_registry": bool(can_view_registry), "can_export": bool(can_export),
+									"can_view_registry": bool(can_view_registry), "can_export": bool(can_export),
                                     "can_email_drafts": bool(can_email_drafts),
                                     "password_hash": ph
                                 }
