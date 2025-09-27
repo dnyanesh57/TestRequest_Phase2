@@ -12,10 +12,10 @@ try:
     import streamlit as st  # type: ignore
     DB_URL = st.secrets["db"]["url"]
     SUPABASE_IPV4 = st.secrets["db"].get("ipv4", os.getenv("SUPABASE_IPV4", ""))  # optional
-except Exception:
-    _DB_URL = os.getenv("DB_URL") # Renamed to _DB_URL to avoid conflict with DB_URL in the function scope
+except Exception: # Fallback for local development without Streamlit secrets
+    DB_URL = os.getenv("DB_URL")
     SUPABASE_IPV4 = os.getenv("SUPABASE_IPV4", "")
-
+    
 if not DB_URL:
     raise RuntimeError("Database URL not configured. Set st.secrets['db']['url'] or env DB_URL.")
 
