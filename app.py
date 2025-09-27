@@ -11,6 +11,10 @@ from db_adapter import (
     read_enabled_tabs, write_enabled_tabs,
     read_company_meta, write_company_meta,
     upsert_requirements,
+    # Add these with your other db_adapter imports:
+    read_vendor_contacts, upsert_vendor_contact, get_vendor_email,
+    log_requirement_email, ensure_vendor_email_tables,
+    
     read_app_settings, write_app_settings,   # NEW
 )
 import numpy as np
@@ -28,6 +32,10 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
+
+# SMTP (for email drafts)
+import smtplib, ssl
+from email.mime.base import MIMEBase
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 
 # ----------------------------- Brand / Theme -----------------------------
@@ -75,6 +83,80 @@ def brand_header():
     st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
     st.markdown('<hr class="brand" />', unsafe_allow_html=True)
 
+
+# Ensure vendor email & mail-log tables exist
+try:
+    ensure_vendor_email_tables()
+except Exception as e:
+    st.error(f"DB init (vendor email tables) failed: {e}")
+
+# SMTP + mail helpers (add once, top-level)
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email import encoders
+
+def _smtp_config_ok() -> tuple[bool, dict]:
+    cfg = (st.secrets.get("smtp", {}) or {})
+    needed = ["host","port","user","password","from_email"]
+    if all(cfg.get(k) for k in needed):
+        try: cfg["port"] = int(cfg["port"])
+        except: cfg["port"] = 587
+        if not cfg.get("from_name"): cfg["from_name"] = "SJCPL Notifications"
+        return True, cfg
+    return False, {}
+
+def build_vendor_email_html(row: dict) -> str:
+    proj = row.get("project_name") or row.get("project_code") or ""
+    ref = row.get("ref","")
+    req_type = row.get("request_type","")
+    vendor = row.get("vendor","")
+    desc = row.get("description","")
+    uom = row.get("uom","")
+    qty = row.get("qty","")
+    stage = row.get("stage","")
+    dt_gen = row.get("generated_at","")
+    return f"""
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+      <p>Dear Vendor (<b>{vendor}</b>),</p>
+      <p>Please find attached the requirement reference <b>{ref}</b> for project <b>{proj}</b>.</p>
+      <table style="border-collapse:collapse;font-size:13px">
+        <tr><td style="padding:4px 8px"><b>Type</b></td><td style="padding:4px 8px">{req_type}</td></tr>
+        <tr><td style="padding:4px 8px"><b>Item</b></td><td style="padding:4px 8px">{desc}</td></tr>
+        <tr><td style="padding:4px 8px"><b>Qty</b></td><td style="padding:4px 8px">{qty} {uom}</td></tr>
+        <tr><td style="padding:4px 8px"><b>Stage</b></td><td style="padding:4px 8px">{stage or '-'}</td></tr>
+        <tr><td style="padding:4px 8px"><b>Generated</b></td><td style="padding:4px 8px">{dt_gen}</td></tr>
+      </table>
+      <p>Regards,<br/>SJCPL — Automated Notifications</p>
+    </div>
+    """
+
+def send_email_via_smtp(to_email: str, subject: str, html_body: str,
+                        attachment_bytes: bytes, attachment_name: str) -> tuple[bool, str]:
+    ok, cfg = _smtp_config_ok()
+    if not ok:
+        return False, "SMTP is not configured in secrets. Add [smtp] settings."
+    try:
+        msg = MIMEMultipart()
+        msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
+        msg["To"] = to_email
+        msg["Subject"] = subject
+        msg.attach(MIMEText(html_body, "html"))
+
+        if attachment_bytes:
+            part = MIMEBase("application", "pdf")
+            part.set_payload(attachment_bytes)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{attachment_name}"')
+            msg.attach(part)
+
+        context = ssl.create_default_context()
+        with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
+            server.starttls(context=context)
+            server.login(cfg["user"], cfg["password"])
+            server.sendmail(cfg["from_email"], [to_email], msg.as_string())
+        return True, "sent"
+    except Exception as e:
+        return False, str(e)
 
 if "app_settings" not in st.session_state:
     st.session_state.app_settings = {
@@ -2148,6 +2230,8 @@ for i, tab_label in enumerate(visible_tabs):
                         with cc2:
                             st.download_button("⬇️ Download cart (CSV)", data=cart_df.to_csv(index=False).encode("utf-8"), file_name="request_cart.csv", mime="text/csv", key="rq-dl-cart")
                         with cc3:
+                            # Email vendor after generating PDF
+                            email_vendor_after = st.checkbox("📧 Email vendor automatically after generating PDF", value=True, key="rq-email-vendor")
                             gen_click = st.button("📄 Generate PDF & Log", type="primary", key="rq-gen")
                         
                         if gen_click:
@@ -2181,6 +2265,37 @@ for i, tab_label in enumerate(visible_tabs):
                                 st.success("Logged & PDF ready. You can manage status in ‘Requirements Registry’.")
                             else:
                                 st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
+
+                            # --- Email vendor (DB-only) after successful generation ---
+                            if email_vendor_after and pdf_bytes and used_rows:
+                                # In your UI flow, all lines in the cart share the same vendor
+                                vendor_key_email = used_rows[0].get("vendor")
+                                try:
+                                    v_email = get_vendor_email(vendor_key_email)
+                                except Exception as e:
+                                    v_email = None
+                                    st.error(f"Vendor email lookup failed: {e}")
+
+                                if not v_email:
+                                    st.warning("No email stored in DB for this vendor. Ask a master admin to add it in Admin → Vendor Contacts.")
+                                else:
+                                    # Subject/body built from the first row (representative)
+                                    first_row = used_rows[0]
+                                    subject = f"[SJCPL] Requirement {first_row['ref']} — {first_row['project_code']}"
+                                    html_body = build_vendor_email_html(first_row)
+                                    attach_name = f"{first_row['ref'].replace('/','_')}.pdf"
+
+                                    ok, msg = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
+                                    # Best-effort log
+                                    try:
+                                        log_requirement_email(first_row["ref"], vendor_key_email, v_email, subject, ok, (None if ok else msg))
+                                    except Exception as e:
+                                        st.warning(f"Email log write failed: {e}")
+
+                                    if ok:
+                                        st.success(f"Emailed vendor at {v_email}")
+                                    else:
+                                        st.error(f"Email send failed: {msg}")
         elif tab_label == "My Requests":
             if can_view("My Requests"):
                 render_my_requests_tab(st, st.session_state.user.get("email",""), st.session_state.reqlog_df, st.session_state.company_meta)
@@ -2293,6 +2408,34 @@ for i, tab_label in enumerate(visible_tabs):
                             st.session_state.acl_df = dfu
                             write_acl_df(dfu)
                             st.success("User saved.")
+                
+                # Admin UI: master-admin–only Vendor Contacts manager
+                with st.expander("📧 Vendor Contacts (DB-only, master admin)"):
+                    try:
+                        vdf = read_vendor_contacts()
+                    except Exception as e:
+                        vdf = pd.DataFrame(columns=["vendor","email"])
+                        st.error(f"Failed to read vendor contacts: {e}")
+                    st.caption("Map Subcontractor_Key → Vendor email. Only stored in the database.")
+                    st.dataframe(vdf, use_container_width=True, hide_index=True)
+
+                    with st.form("vendor-email-upsert"):
+                        nv = st.text_input("Vendor (Subcontractor_Key)")
+                        ne = st.text_input("Vendor Email")
+                        submit_vendor = st.form_submit_button("Save / Update", type="primary")
+                    if submit_vendor:
+                        if not nv or not ne:
+                            st.error("Vendor and email are required.")
+                        else:
+                            try:
+                                upsert_vendor_contact(nv.strip(), ne.strip(), by_email=st.session_state.user.get("email"))
+                                st.success("Saved/updated.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Save failed: {e}")
+
+
+
 
                 with st.expander("🗑️ Remove User", expanded=False):
                     emails = sorted(st.session_state.acl_df["email"].tolist())

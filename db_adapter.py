@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json, os
 from urllib.parse import urlparse
+from contextlib import contextmanager
 import pandas as pd
 from sqlalchemy import create_engine, text
 
@@ -43,6 +44,117 @@ connect_args = {
 
 # Single global engine (do not create engines elsewhere)
 _engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True)
+
+# --- Add these imports at the top of db_adapter.py ---
+
+@contextmanager
+def _conn():
+    with _engine.begin() as c:
+        yield c
+
+def ensure_vendor_email_tables() -> None:
+    """Create vendor_contacts + requirement_mail_log if they don't exist."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS vendor_contacts (
+                  vendor_key TEXT PRIMARY KEY,
+                  email TEXT NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  created_by TEXT,
+                  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  updated_by TEXT
+                )
+            """))
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirement_mail_log (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ref TEXT NOT NULL,
+                  vendor_key TEXT,
+                  email TEXT,
+                  subject TEXT,
+                  ok INTEGER NOT NULL,
+                  error TEXT,
+                  sent_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_requirement_mail_log_ref ON requirement_mail_log(ref)"))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS vendor_contacts (
+                  vendor_key TEXT PRIMARY KEY,
+                  email TEXT NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  created_by TEXT,
+                  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  updated_by TEXT
+                )
+            """))
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirement_mail_log (
+                  id BIGSERIAL PRIMARY KEY,
+                  ref TEXT NOT NULL,
+                  vendor_key TEXT,
+                  email TEXT,
+                  subject TEXT,
+                  ok BOOLEAN NOT NULL,
+                  error TEXT,
+                  sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_requirement_mail_log_ref ON requirement_mail_log(ref)"))
+
+def read_vendor_contacts() -> pd.DataFrame:
+    """Return DataFrame with columns ['vendor','email'] (vendor is Subcontractor_Key)."""
+    with _conn() as c:
+        rows = c.execute(text("SELECT vendor_key AS vendor, email FROM vendor_contacts ORDER BY vendor_key")).mappings().all()
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["vendor", "email"])
+
+def upsert_vendor_contact(vendor: str, email: str, by_email: str | None = None) -> None:
+    """UPSERT a vendor's email (DB-only)."""
+    vendor = (vendor or "").strip()
+    email = (email or "").strip()
+    if not vendor or not email:
+        raise ValueError("vendor and email are required")
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                INSERT INTO vendor_contacts(vendor_key, email, created_by, updated_by)
+                VALUES (:v, :e, :by, :by)
+                ON CONFLICT(vendor_key) DO UPDATE SET
+                  email = excluded.email,
+                  updated_at = datetime('now'),
+                  updated_by = excluded.updated_by
+            """), {"v": vendor, "e": email, "by": by_email})
+        else:
+            c.execute(text("""
+                INSERT INTO vendor_contacts(vendor_key, email, created_by, updated_by)
+                VALUES (:v, :e, :by, :by)
+                ON CONFLICT (vendor_key) DO UPDATE SET
+                  email = EXCLUDED.email,
+                  updated_at = NOW(),
+                  updated_by = EXCLUDED.updated_by
+            """), {"v": vendor, "e": email, "by": by_email})
+
+def get_vendor_email(vendor: str) -> str | None:
+    """Convenience lookup for a single vendor email."""
+    with _conn() as c:
+        r = c.execute(text("SELECT email FROM vendor_contacts WHERE vendor_key = :v"), {"v": vendor}).scalar()
+        return r if r else None
+
+def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: bool, error: str | None = None) -> None:
+    """Audit log for outgoing requirement emails."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                INSERT INTO requirement_mail_log(ref, vendor_key, email, subject, ok, error)
+                VALUES (:ref, :vendor, :email, :subject, :ok, :error)
+            """), {"ref": ref, "vendor": vendor, "email": email, "subject": subject, "ok": 1 if ok else 0, "error": error})
+        else:
+            c.execute(text("""
+                INSERT INTO requirement_mail_log(ref, vendor_key, email, subject, ok, error)
+                VALUES (:ref, :vendor, :email, :subject, :ok, :error)
+            """), {"ref": ref, "vendor": vendor, "email": email, "subject": subject, "ok": ok, "error": error})
 
 # -------------------- Existing API (unchanged logic) --------------------
 
