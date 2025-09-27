@@ -289,6 +289,70 @@ def write_acl_df(df: pd.DataFrame):
         cx.execute(text("delete from acl_users"))
     df_write_replace("acl_users", df, index=False)
 
+def ensure_approval_recipient_tables() -> None:
+    """Create approval_recipients table if it doesn't exist."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS approval_recipients (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  project_code TEXT NOT NULL,
+                  vendor_key TEXT NOT NULL,
+                  request_type TEXT NOT NULL,
+                  email TEXT NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  created_by TEXT,
+                  UNIQUE (project_code, vendor_key, request_type, email)
+                )
+            """))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS approval_recipients (
+                  id BIGSERIAL PRIMARY KEY,
+                  project_code TEXT NOT NULL,
+                  vendor_key TEXT NOT NULL,
+                  request_type TEXT NOT NULL,
+                  email TEXT NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  created_by TEXT,
+                  UNIQUE (project_code, vendor_key, request_type, email)
+                )
+            """))
+
+def read_approval_recipients() -> pd.DataFrame:
+    """Return DataFrame with approval recipients."""
+    with _conn() as c:
+        rows = c.execute(text("SELECT * FROM approval_recipients ORDER BY project_code, vendor_key, request_type, email")).mappings().all()
+        return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["id", "project_code", "vendor_key", "request_type", "email", "created_at", "created_by"])
+
+def upsert_approval_recipient(project_code: str, vendor_key: str, request_type: str, email: str, created_by: str | None = None) -> None:
+    """Add or update an approval recipient."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by)
+                VALUES (:pc, :vk, :rt, :e, :cb)
+                ON CONFLICT (project_code, vendor_key, request_type, email) DO NOTHING
+            """), {"pc": project_code, "vk": vendor_key, "rt": request_type, "e": email, "cb": created_by})
+        else:
+            c.execute(text("""
+                INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by)
+                VALUES (:pc, :vk, :rt, :e, :cb)
+                ON CONFLICT (project_code, vendor_key, request_type, email) DO NOTHING
+            """), {"pc": project_code, "vk": vendor_key, "rt": request_type, "e": email, "cb": created_by})
+
+def delete_approval_recipient(recipient_id: int) -> None:
+    """Delete an approval recipient by ID."""
+    with _conn() as c:
+        c.execute(text("DELETE FROM approval_recipients WHERE id = :id"), {"id": recipient_id})
+
+def list_approver_emails(project_code: str, vendor_key: str, request_type: str) -> list[str]:
+    """List emails of approvers for a given project, vendor, and request type."""
+    with _conn() as c:
+        rows = c.execute(text("SELECT email FROM approval_recipients WHERE project_code = :pc AND vendor_key = :vk AND request_type = :rt"),
+                         {"pc": project_code, "vk": vendor_key, "rt": request_type}).scalars().all()
+        return list(rows)
+
 def read_reqlog_df() -> pd.DataFrame:
     return df_read("select * from requirements_log order by generated_at desc")
 
