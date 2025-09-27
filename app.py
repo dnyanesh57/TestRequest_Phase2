@@ -94,17 +94,22 @@ except Exception as e:
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
-
 def _smtp_config_ok() -> tuple[bool, dict]:
-    cfg = (st.secrets.get("smtp", {}) or {})
-    needed = ["host","port","user","password","from_email"]
-    if all(cfg.get(k) for k in needed):
-        try: cfg["port"] = int(cfg["port"])
-        except: cfg["port"] = 587
-        if not cfg.get("from_name"): cfg["from_name"] = "SJCPL Notifications"
-        return True, cfg
-    return False, {}
-
+    """
+    Read SMTP settings from st.secrets without mutating it.
+    Returns: (ok, cfg) where cfg has normalized keys and defaults applied.
+    Required keys: host, port, user, password, from_email
+    Optional: from_name (defaults to 'SJCPL Notifications')
+    """
+    raw = (st.secrets.get("smtp", {}) or {})
+    port_val = raw.get("port", 587)
+    try:
+        port = int(str(port_val).strip())
+    except Exception:
+        port = 587
+    cfg = {"host": raw.get("host"), "port": port, "user": raw.get("user"), "password": raw.get("password"), "from_email": raw.get("from_email"), "from_name": (raw.get("from_name") or "SJCPL Notifications")}
+    ok = all(cfg.get(k) for k in ["host", "port", "user", "password", "from_email"])
+    return ok, cfg
 def build_vendor_email_html(row: dict) -> str:
     proj = row.get("project_name") or row.get("project_code") or ""
     ref = row.get("ref","")
