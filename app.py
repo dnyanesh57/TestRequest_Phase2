@@ -15,7 +15,7 @@ from db_adapter import (
     read_vendor_contacts, upsert_vendor_contact, get_vendor_email,
     log_requirement_email, ensure_vendor_email_tables,
     ensure_approval_recipient_tables, read_approval_recipients,
-    # Add these with your other db_adapter imports:
+    mark_vendor_emailed, # Add these with your other db_adapter imports:
     upsert_approval_recipient, delete_approval_recipient, list_approver_emails,
 
     
@@ -1662,6 +1662,7 @@ def _send_vendor_emails_for_refs(refs: list[str]):
 
     if sent_ok:
         st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
+        mark_vendor_emailed(refs, st.session_state.user.get("email",""))
     if sent_err:
         st.error("Some vendor emails failed: " + "; ".join(sent_err))
 
