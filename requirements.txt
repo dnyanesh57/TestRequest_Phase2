@@ -7,4 +7,3 @@ reportlab
 sqlalchemy
 psycopg2-binary
 pytz
-smtplib
