@@ -2748,7 +2748,6 @@ for i, tab_label in enumerate(visible_tabs):
                         (NULL, NULL, request_type) → (NULL, NULL, NULL).
                     </div>
                     """, unsafe_allow_html=True)
-                    st.error(f"Delete failed: {e}")
                 # Add SMTP Diagnostics
                 def smtp_connectivity_check():
                     ok, cfg = _smtp_config_ok()
