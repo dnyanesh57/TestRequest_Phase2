@@ -2654,10 +2654,10 @@ for i, tab_label in enumerate(visible_tabs):
                     df = df[df["project_code"].isin(_sites)].copy()
 
                 c1, c2, c3, c4 = st.columns(4)
-                with c1: proj_pick = st.multiselect("Project", sorted(df["project_code"].dropna().unique()), default=[])
-                with c2: type_pick = st.multiselect("Type", sorted(df["request_type"].dropna().unique()), default=[])
-                with c3: vendor_pick = st.multiselect("Vendor", sorted(df["vendor"].dropna().unique()), default=[])
-                with c4: status_pick = st.multiselect("Status", sorted(df["status"].dropna().unique()), default=[])
+                with c1: proj_pick = st.multiselect("Project", sorted(df["project_code"].dropna().unique()), default=[], key="reg-proj-pick")
+                with c2: type_pick = st.multiselect("Type", sorted(df["request_type"].dropna().unique()), default=[], key="reg-type-pick")
+                with c3: vendor_pick = st.multiselect("Vendor", sorted(df["vendor"].dropna().unique()), default=[], key="reg-vendor-pick")
+                with c4: status_pick = st.multiselect("Status", sorted(df["status"].dropna().unique()), default=[], key="reg-status-pick")
 
                 if proj_pick: df = df[df["project_code"].isin(proj_pick)]
                 if type_pick: df = df[df["request_type"].isin(type_pick)]
