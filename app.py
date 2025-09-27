@@ -2447,13 +2447,13 @@ for i, tab_label in enumerate(visible_tabs):
                                             st.error(f"Approval email failed: {msg_mail}")
                                         
                             except Exception as e:
-                                st.error(f"Error while sending approval email: {e}")
+                                st.error(f"Error while sending approval email: {e}") # Patch 1
         elif tab_label == "My Requests":
             if can_view("My Requests"):
                 render_my_requests_tab(st, st.session_state.user.get("email",""), st.session_state.reqlog_df, st.session_state.company_meta)
         elif tab_label == "Requirements Registry":
             if not _user_can("can_view_registry"):
-                st.warning("You do not have permission to access Requirements Registry.")
+                st.warning("You do not have permission to access Requirements Registry.") # Patch 2
             elif can_view("Requirements Registry"):
                 st.subheader("Requirements Registry")
                 _ensure_reqlog_in_state()
@@ -2489,8 +2489,9 @@ for i, tab_label in enumerate(visible_tabs):
                     st.markdown("### Approval Actions")
                     # Focus on items needing approval by default
                     df_admin = df.copy()
+                    # Filter for pending items only
                     df_admin = df_admin[df_admin["status"].astype(str).str.startswith("Pending")]
-
+ 
                     refs_to_act = st.multiselect(
                         "Select reference(s) to act on",
                         df_admin["ref"].astype(str).tolist(),
@@ -2498,165 +2499,152 @@ for i, tab_label in enumerate(visible_tabs):
                     )
                     note = st.text_area("Note (will be recorded into status_detail)", "", key="admin-approve-note")
 
-                    # NEW: two toggles (vendor OFF by default, requester ON)
+                    # Toggles: vendor OFF by default, requester ON by default
                     colA, colB, colC, colD = st.columns([1,1,1,2])
                     with colA:
                         do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
                     with colB:
                         do_reject = st.button("⛔ Reject", key="admin-reject-btn")
-                    with colC:
-                        send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=False, key="admin-send-vendor")
+                    with colC: # Patch 3: Changed default value to True
+                        send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
                     with colD:
                         send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
+ 
                     if (do_approve or do_reject) and not refs_to_act:
                         st.warning("Pick at least one reference.")
                     elif do_approve or do_reject:
                         new_status = "Approved" if do_approve else "Rejected"
-                        try:
-                            # 1) Update in DB
-                            update_requirement_status(refs_to_act, new_status, st.session_state.user.get("email",""), status_detail=note or "")
-                            # 2) Refresh grid from DB
-                            st.session_state.reqlog_df = read_reqlog_df()
-                            st.success(f"{new_status}: {len(refs_to_act)} reference(s) updated.")
+                        try: # 1) Update DB
+                            update_requirement_status(refs_to_act, new_status, st.session_state.user.get("email",""), status_detail=note or "") # Update status in DB
+                            st.session_state.reqlog_df = read_reqlog_df() # Refresh the session state DataFrame
+                            st.success(f"{new_status}: {len(refs_to_act)} reference(s) updated.") # Success message
+
                         except Exception as e:
                             st.error(f"Failed to update status: {e}")
+                            st.stop() # Stop here to prevent further execution and allow rerun
+ 
+                        # 2) Load the rows we just acted on (for emails/PDF)
+                        try:
+                            rows = read_requirements_by_refs(refs_to_act)
+                        except Exception as e:
+                            rows = []
+                            st.error(f"Could not reload selected refs for emailing: {e}")
 
-
-                        # 3) (Optional) On Approve: send vendor email with a combined PDF of selected refs
-                        if do_approve and send_vendor_after_approve:
-                            # Pull rows back to build the PDF & get vendor/project info
+                        # 3) Build one combined PDF (reuse for vendor & requester)
+                        pdf_bytes = b""
+                        if rows:
                             try:
-                                rows = read_requirements_by_refs(refs_to_act)
+                                pdf_bytes = build_requirement_pdf_from_rows(rows, st.session_state.company_meta)
                             except Exception as e:
-                                rows = []
-                                st.error(f"Could not reload rows for email: {e}")
-
-                            if rows:
-                                # Build a combined PDF from these rows
+                                pdf_bytes = b"" # Ensure pdf_bytes is empty on failure
+                                st.error(f"PDF build failed: {e}")
+ 
+                        # 4) Optionally email vendors (group by vendor)
+                        if do_approve and send_vendor_after_approve and rows and pdf_bytes:
+                            from collections import defaultdict
+                            by_vendor = defaultdict(list)
+                            for r in rows:
+                                by_vendor[str(r.get("vendor",""))].append(r) # Group by vendor
+ 
+                            sent_ok, sent_err = 0, []
+                            for vendor_key, bucket in by_vendor.items():
+                                v_email = None
                                 try:
-                                    pdf_bytes = build_requirement_pdf_from_rows(rows, st.session_state.company_meta)
+                                    v_email = get_vendor_email(vendor_key)
+                                    if not v_email:
+                                        st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
+                                        continue # Skip if no email found
+ 
+                                    subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                    body_rows = "".join(
+                                        f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                                        f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                                        f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                                        for r in bucket
+                                    )
+                                    html_body = f"""
+                                    <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                                      <p>The following request(s) have been <b>Approved</b>:</p>
+                                      <table style="border-collapse:collapse;font-size:13px">
+                                        <thead><tr style="background:#f0f0f0"><th style="padding:4px 8px;text-align:left">Ref</th><th style="padding:4px 8px;text-align:left">Item</th><th style="padding:4px 8px;text-align:left">Qty</th></tr></thead>
+                                        <tbody>{body_rows}</tbody>
+                                      </table>
+                                      <p>Attached: approved request PDF.</p>
+                                    </div>
+                                    """
+                                    attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
+ 
+                                    ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
+                                    try:
+                                        log_requirement_email(bucket[0].get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
+                                    except Exception: # Best-effort logging
+                                        pass
+ 
+                                    if ok_mail: sent_ok += 1 # Count successful sends
+                                    else: sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
+ 
                                 except Exception as e:
-                                    pdf_bytes = b""
-                                    st.error(f"PDF build failed: {e}")
-
-                                # We’ll send one email per vendor (grouping selected refs)
-                                from collections import defaultdict
-                                by_vendor = defaultdict(list)
-                                for r in rows:
-                                    by_vendor[str(r.get("vendor",""))].append(r)
-
-                                sent_ok, sent_err = 0, [] # Patch 2
-                                for vendor_key, bucket in by_vendor.items():
-                                    v_email = None # <-- initialize so it always exists
+                                    sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
+                                    continue
+ 
+                            if sent_ok:
+                                st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
+                            if sent_err:
+                                st.error("Some vendor emails failed: " + "; ".join(sent_err)) # Report all errors
+ 
+                        # 5) Optionally email requesters (group by generated_by_email)
+                        if do_approve and send_requester_after_approve and rows and pdf_bytes:
+                            from collections import defaultdict
+                            by_requester = defaultdict(list)
+                            for r in rows:
+                                remail = (r.get("generated_by_email") or "").strip()
+                                if remail: # Group by requester email
+                                    by_requester[remail].append(r)
+ 
+                            if not by_requester:
+                                st.warning("No requester email found on the selected refs.")
+                            else:
+                                approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
+                                sent_ok_r, sent_err_r = 0, []
+                                for remail, bucket in by_requester.items():
+                                    subject = f"[SJCPL] Your request was Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                    body_rows = "".join(
+                                        f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                                        f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                                        f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                                        for r in bucket
+                                    )
+                                    html_body = f"""
+                                    <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                                      <p><b>Your request has been approved</b> by {approver_name}.</p>
+                                      <table style="border-collapse:collapse;font-size:13px">
+                                        <thead><tr style="background:#f0f0f0">
+                                          <th style="padding:4px 8px;text-align:left">Ref</th>
+                                          <th style="padding:4px 8px;text-align:left">Item</th>
+                                          <th style="padding:4px 8px;text-align:left">Qty</th>
+                                        </tr></thead>
+                                        <tbody>{body_rows}</tbody>
+                                      </table>
+                                      <p>Attached: approved request PDF.</p>
+                                    </div>
+                                    """
+                                    attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
+                                    ok_mail, msg_mail = send_email_via_smtp(remail, subject, html_body, pdf_bytes, attach_name)
+ 
                                     try:
-                                        v_email = get_vendor_email(vendor_key)
-                                        if not v_email:
-                                            st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
-                                            continue
-
-                                        # Subject/body — show approver & requester
-                                        approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
-                                        req_name = bucket[0].get("generated_by_name","User")
-                                        req_email = bucket[0].get("generated_by_email","")
-
-                                        subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
-                                        body_rows = "".join(
-                                            f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
-                                            f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
-                                            f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
-                                            for r in bucket
-                                        )
-                                        html_body = f"""<div style="font-family:Arial,Helvetica,sans-serif;color:#222"><p><b>Approved by:</b> {approver_name} &nbsp;&nbsp; <b>Requested by:</b> {req_name}{(' &lt;'+req_email+'&gt;') if req_email else ''}</p><p>The following request(s) have been <b>Approved</b>:</p><table style="border-collapse:collapse;font-size:13px"><thead><tr style="background:#f0f0f0"><th style="padding:4px 8px;text-align:left">Ref</th><th style="padding:4px 8px;text-align:left">Item</th><th style="padding:4px 8px;text-align:left">Qty</th></tr></thead><tbody>{body_rows}</tbody></table><p>Attached: signed request PDF.</p></div>"""
-                                        attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
-                                        ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
-                                        try:
-                                            log_requirement_email(bucket[0].get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
-                                        except Exception:
-                                            pass
-                                        if ok_mail:
-                                            sent_ok += 1
-                                        else:
-                                            sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
-
-                                    except Exception as e:
-                                        # v_email is always defined (maybe None), so no NameError
-                                        sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
-                                        continue
-
-                                if sent_ok:
-                                    st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
-                                if sent_err:
-                                    st.error("Some vendor emails failed: " + "; ".join(sent_err))
-
-                                # --- (Optional) On Approve: email requester(s) with PDF ---
-                                if do_approve and send_requester_after_approve:
-                                    # Reload rows we just approved (we already had 'rows' above; reuse if available)
-                                    try:
-                                        rows_req = rows if 'rows' in locals() and rows else read_requirements_by_refs(refs_to_act)
-                                    except Exception as e:
-                                        rows_req = []
-                                        st.error(f"Could not reload rows for requester email: {e}")
-
-                                    if rows_req:
-                                        # Build one combined PDF for the approved selections (reuse already-built pdf_bytes if present)
-                                        try:
-                                            pdf_for_req = pdf_bytes if 'pdf_bytes' in locals() and pdf_bytes else build_requirement_pdf_from_rows(rows_req, st.session_state.company_meta)
-                                        except Exception as e:
-                                            pdf_for_req = b""
-                                            st.error(f"PDF build failed for requester email: {e}")
-
-                                        # Group by requester email so they get a single message
-                                        from collections import defaultdict
-                                        by_requester = defaultdict(list)
-                                        for r in rows_req:
-                                            remail = (r.get("generated_by_email") or "").strip()
-                                            if remail:
-                                                by_requester[remail].append(r)
-
-                                        if not by_requester:
-                                            st.warning("No requester email found on the selected refs.")
-                                        else:
-                                            approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
-                                            sent_ok_r, sent_err_r = 0, []
-                                            for remail, bucket in by_requester.items():
-                                                subject = f"[SJCPL] Your request was Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
-                                                body_rows = "".join(
-                                                    f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
-                                                    f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
-                                                    f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
-                                                    for r in bucket
-                                                )
-                                                html_body = f"""
-                                                <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
-                                                  <p><b>Your request has been approved</b> by {approver_name}.</p>
-                                                  <table style="border-collapse:collapse;font-size:13px">
-                                                    <thead><tr style="background:#f0f0f0">
-                                                      <th style="padding:4px 8px;text-align:left">Ref</th>
-                                                      <th style="padding:4px 8px;text-align:left">Item</th>
-                                                      <th style="padding:4px 8px;text-align:left">Qty</th>
-                                                    </tr></thead>
-                                                    <tbody>{body_rows}</tbody>
-                                                  </table>
-                                                  <p>Attached: approved request PDF.</p>
-                                                </div>
-                                                """
-                                                attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
-                                                ok_mail, msg_mail = send_email_via_smtp(remail, subject, html_body, pdf_for_req, attach_name)
-
-                                                # Optional: log to your email log if available
-                                                try:
-                                                    log_requirement_email(bucket[0].get("ref",""), bucket[0].get("vendor",""), remail, subject, ok_mail, (None if ok_mail else msg_mail))
-                                                except Exception:
-                                                    pass
-
-                                                if ok_mail: sent_ok_r += 1
-                                                else: sent_err_r.append(f"{remail}: {msg_mail}")
-
-                                            if sent_ok_r:
-                                                st.success(f"Emailed requester(s) for {sent_ok_r} group(s).")
-                                            if sent_err_r:
-                                                st.error("Some requester emails failed: " + "; ".join(sent_err_r))
-                                st.rerun()
+                                        log_requirement_email(bucket[0].get("ref",""), bucket[0].get("vendor",""), remail, subject, ok_mail, (None if ok_mail else msg_mail)) # Log for requester
+                                    except Exception: # Best-effort logging
+                                        pass
+ 
+                                    if ok_mail: sent_ok_r += 1 # Count successful sends
+                                    else: sent_err_r.append(f"{remail}: {msg_mail}")
+ 
+                                if sent_ok_r:
+                                    st.success(f"Emailed requester(s) for {sent_ok_r} group(s).")
+                                if sent_err_r:
+                                    st.error("Some requester emails failed: " + "; ".join(sent_err_r))
+                        # 6) Finally, refresh the grid
+                        st.rerun()
         elif tab_label == "Admin":
             if can_view("Admin") and _user_is_master_admin():
                 st.subheader("Admin — Users & Access")
