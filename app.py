@@ -1190,6 +1190,11 @@ def _decide_status(entry: Dict, items_df: pd.DataFrame) -> Tuple[str, str, Optio
     else:
         return ("Pending Admin Approval", "Quantity addition requested; admin must approve.", None)
 
+def _can_send_vendor_email(status: str) -> bool:
+    s = (status or "").strip()
+    return s in ("Approved", "Auto Approved")
+
+
 def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=18*mm, rightMargin=18*mm, topMargin=18*mm, bottomMargin=18*mm)
@@ -1557,6 +1562,17 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
     if mine.empty:
         st.info("You haven't generated any requests yet.")
         return
+
+    # NEW: Send Vendor Email (only Approved / Auto Approved)
+    with st.expander("📧 Send Email to Vendor (Approved items only)", expanded=True):
+        sendable_refs = mine[mine["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
+        if not sendable_refs:
+            st.caption("No Approved / Auto Approved requests in your list.")
+        else:
+            sel_refs = st.multiselect("Select Approved reference(s) to email", sendable_refs, default=[], key="myreq-email-refs")
+            if st.button("Send email to vendor", type="primary", key="myreq-email-btn"):
+                _send_vendor_emails_for_refs(sel_refs)
+        return
     c1, c2 = st.columns(2)
     with c1:
         status_pick = st.multiselect("Status filter", sorted(mine["status"].dropna().unique()), default=[])
@@ -1566,6 +1582,88 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
     if vendor_pick: mine = mine[mine["vendor"].isin(vendor_pick)]
     st.dataframe(mine.sort_values("generated_at", ascending=False), use_container_width=True, hide_index=True)
     render_reprint_section(st, mine, company_meta, key_prefix="myreq-reprint")
+
+def _send_vendor_emails_for_refs(refs: list[str]):
+    if not refs:
+        st.warning("Pick at least one reference.")
+        return
+
+    # Load rows and ensure all are sendable
+    try:
+        rows = read_requirements_by_refs(refs)
+    except Exception as e:
+        st.error(f"Could not load selected refs: {e}")
+        return
+
+    not_sendable = [r["ref"] for r in rows if not _can_send_vendor_email(str(r.get("status","")))]
+    if not_sendable:
+        st.error("Vendor emailing is allowed only for Approved / Auto Approved items. These are not allowed: " + ", ".join(not_sendable))
+        return
+
+    # Build one combined PDF for the selected refs
+    try:
+        pdf_bytes = build_requirement_pdf_from_rows(rows, st.session_state.company_meta)
+    except Exception as e:
+        st.error(f"PDF build failed: {e}")
+        return
+
+    # Send one email per vendor (group)
+    from collections import defaultdict
+    by_vendor = defaultdict(list)
+    for r in rows:
+        by_vendor[str(r.get("vendor",""))].append(r)
+
+    sent_ok, sent_err = 0, []
+    for vendor_key, bucket in by_vendor.items():
+        v_email = None
+        try:
+            v_email = get_vendor_email(vendor_key)
+            if not v_email:
+                st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
+                continue
+
+            subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+            body_rows = "".join(
+                f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                for r in bucket
+            )
+            html_body = f"""
+            <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+              <p>The following request(s) have been <b>Approved</b>:</p>
+              <table style="border-collapse:collapse;font-size:13px">
+                <thead><tr style="background:#f0f0f0">
+                  <th style="padding:4px 8px;text-align:left">Ref</th>
+                  <th style="padding:4px 8px;text-align:left">Item</th>
+                  <th style="padding:4px 8px;text-align:left">Qty</th>
+                </tr></thead>
+                <tbody>{body_rows}</tbody>
+              </table>
+              <p>Attached: approved request PDF.</p>
+            </div>
+            """
+            attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
+
+            ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
+            try:
+                log_requirement_email(bucket[0].get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
+            except Exception:
+                pass
+
+            if ok_mail:
+                sent_ok += 1
+            else:
+                sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
+
+        except Exception as e:
+            sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
+            continue
+
+    if sent_ok:
+        st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
+    if sent_err:
+        st.error("Some vendor emails failed: " + "; ".join(sent_err))
 
 def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
     """Builds a lightweight HTML preview that mirrors the PDF content for a single requirement row."""
@@ -2296,7 +2394,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 st.success("Added to request cart.")
                             st.rerun()
                             
-                    if st.session_state.req_cart:
+                    if st.session_state.req_cart: # If cart is not empty
                         st.markdown("---")
                         st.markdown("### Current Request — Line Items")
                         cart_df = pd.DataFrame(st.session_state.req_cart)
@@ -2307,13 +2405,13 @@ for i, tab_label in enumerate(visible_tabs):
                             if st.button("🗑️ Clear cart", key="rq-clear"):
                                 st.session_state.req_cart = []
                                 st.rerun()
-                        with cc2:
-                            st.download_button("⬇️ Download cart (CSV)", data=cart_df.to_csv(index=False).encode("utf-8"), file_name="request_cart.csv", mime="text/csv", key="rq-dl-cart")
+                        with cc2: # Removed vendor email checkbox from here
+                            pass
                         with cc3:
                             # Email vendor after generating PDF
                             email_vendor_after = st.checkbox("📧 Email vendor automatically after generating PDF", value=True, key="rq-email-vendor")
                             gen_click = st.button("📄 Generate PDF & Log", type="primary", key="rq-gen")
-                        
+                       
                         if gen_click:
                             pdf_bytes, updated_df, reused_map, used_rows = generate_pdf_and_log_lines(
                                 cart_entries=st.session_state.req_cart,
@@ -2341,41 +2439,21 @@ for i, tab_label in enumerate(visible_tabs):
                                     file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
                                     mime="application/pdf", key="rq-pdf")
                                 if reused_map:
-                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.")
-                                st.success("Logged & PDF ready. You can manage status in ‘Requirements Registry’.")
+                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.") # Success message
+
+                                # NEW: clear guidance, no vendor email button here if approval is needed
+                                # Check the statuses of the generated rows:
+                                any_pending = any(str(r.get("status","")).startswith("Pending") for r in used_rows)
+                                all_sendable = all(_can_send_vendor_email(str(r.get("status",""))) for r in used_rows)
+
+                                if any_pending:
+                                    st.info("Vendor email is disabled because one or more items need approval. Once approved, you’ll be able to email the vendor from ‘My Requests’ or ‘Requirements Registry’.")
+                                elif all_sendable:
+                                    st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
+                                else:
+                                    st.info("Some lines are not yet approved; vendor emailing will be available once they’re approved.")
                             else:
                                 st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
-
-                            # --- Email vendor (DB-only) after successful generation ---
-                            if email_vendor_after and pdf_bytes and used_rows:
-                                # In your UI flow, all lines in the cart share the same vendor
-                                vendor_key_email = used_rows[0].get("vendor")
-                                try:
-                                    v_email = get_vendor_email(vendor_key_email)
-                                except Exception as e:
-                                    v_email = None
-                                    st.error(f"Vendor email lookup failed: {e}")
-
-                                if not v_email:
-                                    st.warning("No email stored in DB for this vendor. Ask a master admin to add it in Admin → Vendor Contacts.")
-                                else:
-                                    # Subject/body built from the first row (representative)
-                                    first_row = used_rows[0]
-                                    subject = f"[SJCPL] Requirement {first_row['ref']} — {first_row['project_code']}"
-                                    html_body = build_vendor_email_html(first_row)
-                                    attach_name = f"{first_row['ref'].replace('/','_')}.pdf"
-
-                                    ok, msg = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
-                                    # Best-effort log
-                                    try:
-                                        log_requirement_email(first_row["ref"], vendor_key_email, v_email, subject, ok, (None if ok else msg))
-                                    except Exception as e:
-                                        st.warning(f"Email log write failed: {e}")
-
-                                    if ok:
-                                        st.success(f"Emailed vendor at {v_email}")
-                                    else:
-                                        st.error(f"Email send failed: {msg}")
 
                             # --- Email approvers for rows that require approval ---
                             try: # Patch 1
@@ -2504,8 +2582,7 @@ for i, tab_label in enumerate(visible_tabs):
                     with colA:
                         do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
                     with colB:
-                        do_reject = st.button("⛔ Reject", key="admin-reject-btn")
-                    with colC: # Patch 3: Changed default value to True
+                        do_reject = st.button("⛔ Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
                         send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
                     with colD:
                         send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
@@ -2540,7 +2617,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 st.error(f"PDF build failed: {e}")
  
                         # 4) Optionally email vendors (group by vendor)
-                        if do_approve and send_vendor_after_approve and rows and pdf_bytes:
+                        if do_approve and send_vendor_after_approve and rows and pdf_bytes: # Only send if explicitly checked
                             from collections import defaultdict
                             by_vendor = defaultdict(list)
                             for r in rows:
@@ -2644,6 +2721,14 @@ for i, tab_label in enumerate(visible_tabs):
                                 if sent_err_r:
                                     st.error("Some requester emails failed: " + "; ".join(sent_err_r))
                         # 6) Finally, refresh the grid
+                        st.rerun()
+
+                # NEW: Separate expander for Send Email to Vendor (only for Approved / Auto Approved)
+                with st.expander("📧 Send Email to Vendor (Approved items only)", expanded=False):
+                    refs_all = df[df["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
+                    refs_pick = st.multiselect("Select ref(s)", refs_all, key="reg-email-refs")
+                    if st.button("Send vendor email", key="reg-email-btn"):
+                        _send_vendor_emails_for_refs(refs_pick)
                         st.rerun()
         elif tab_label == "Admin":
             if can_view("Admin") and _user_is_master_admin():
