@@ -3,6 +3,7 @@ from __future__ import annotations
 import json, os
 from urllib.parse import urlparse
 from contextlib import contextmanager
+import datetime as dt
 import pandas as pd
 from sqlalchemy import create_engine, text
 
@@ -12,7 +13,7 @@ try:
     DB_URL = st.secrets["db"]["url"]
     SUPABASE_IPV4 = st.secrets["db"].get("ipv4", os.getenv("SUPABASE_IPV4", ""))  # optional
 except Exception:
-    DB_URL = os.getenv("DB_URL")
+    _DB_URL = os.getenv("DB_URL") # Renamed to _DB_URL to avoid conflict with DB_URL in the function scope
     SUPABASE_IPV4 = os.getenv("SUPABASE_IPV4", "")
 
 if not DB_URL:
@@ -20,7 +21,7 @@ if not DB_URL:
 
 # Ensure the psycopg2 dialect so libpq connect args work
 if DB_URL.startswith("postgresql://"):
-    DB_URL = "postgresql+psycopg2://" + DB_URL[len("postgresql://") :]
+    _DB_URL = "postgresql+psycopg2://" + DB_URL[len("postgresql://") :]
 
 # Extract hostname for SNI/cert verification (keeps TLS happy even when forcing IPv4)
 parsed = urlparse(DB_URL.replace("+psycopg2", ""))  # scheme part not needed for parsing netloc
@@ -43,7 +44,7 @@ connect_args = {
 }
 
 # Single global engine (do not create engines elsewhere)
-_engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True)
+_engine = create_engine(_DB_URL, connect_args=connect_args, pool_pre_ping=True)
 
 # --- Add these imports at the top of db_adapter.py ---
 
@@ -55,7 +56,7 @@ def _conn():
 def ensure_vendor_email_tables() -> None:
     """Create vendor_contacts + requirement_mail_log if they don't exist."""
     with _conn() as c:
-        if DB_URL.startswith("sqlite"):
+        if _DB_URL.startswith("sqlite"):
             c.execute(text("""
                 CREATE TABLE IF NOT EXISTS vendor_contacts (
                   vendor_key TEXT PRIMARY KEY,
@@ -117,7 +118,7 @@ def upsert_vendor_contact(vendor: str, email: str, by_email: str | None = None) 
     if not vendor or not email:
         raise ValueError("vendor and email are required")
     with _conn() as c:
-        if DB_URL.startswith("sqlite"):
+        if _DB_URL.startswith("sqlite"):
             c.execute(text("""
                 INSERT INTO vendor_contacts(vendor_key, email, created_by, updated_by)
                 VALUES (:v, :e, :by, :by)
@@ -145,7 +146,7 @@ def get_vendor_email(vendor: str) -> str | None:
 def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: bool, error: str | None = None) -> None:
     """Audit log for outgoing requirement emails."""
     with _conn() as c:
-        if DB_URL.startswith("sqlite"):
+        if _DB_URL.startswith("sqlite"):
             c.execute(text("""
                 INSERT INTO requirement_mail_log(ref, vendor_key, email, subject, ok, error)
                 VALUES (:ref, :vendor, :email, :subject, :ok, :error)
@@ -156,6 +157,49 @@ def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: b
                 VALUES (:ref, :vendor, :email, :subject, :ok, :error)
             """), {"ref": ref, "vendor": vendor, "email": email, "subject": subject, "ok": ok, "error": error})
 
+def update_requirement_status(refs: list[str], status: str, approver_email: str,
+                              status_detail: str | None = None, approved_at_iso: str | None = None):
+    """
+    Update requirement status fields for a list of refs.
+    Allowed statuses: 'Approved', 'Rejected', 'Pending Admin Approval', 'Auto Approved'
+    """
+    if not refs: return
+    if approved_at_iso is None:
+        approved_at_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    with _conn() as c:
+        # Update only the fields we need; 'approved_at' on rejection can be blank if you prefer
+        q = text("""
+            UPDATE requirements_log
+               SET status = :st,
+                   approver = :appr,
+                   approved_at = CASE WHEN :st = 'Approved' THEN :dt ELSE '' END,
+                   status_detail = COALESCE(:det, status_detail)
+             WHERE ref = ANY(:refs)
+        """)
+        # For SQLite fallback, ANY(..) is unsupported — use simple IN
+        if _DB_URL.startswith("sqlite"):
+            q = text("""
+                UPDATE requirements_log
+                   SET status = :st,
+                       approver = :appr,
+                       approved_at = CASE WHEN :st = 'Approved' THEN :dt ELSE '' END,
+                       status_detail = COALESCE(:det, status_detail)
+                 WHERE ref IN (%s)
+            """ % ",".join("?"*len(refs)))
+            c.execute(q, [status, approver_email, approved_at_iso, status_detail] + refs)
+        else:
+            c.execute(q, {"st": status, "appr": approver_email, "dt": approved_at_iso, "det": status_detail, "refs": refs})
+
+def read_requirements_by_refs(refs: list[str]) -> list[dict]:
+    if not refs: return []
+    with _conn() as c:
+        if _DB_URL.startswith("sqlite"):
+            q = text("SELECT * FROM requirements_log WHERE ref IN (%s)" % ",".join("?"*len(refs)))
+            rows = c.execute(q, refs).mappings().all()
+        else:
+            q = text("SELECT * FROM requirements_log WHERE ref = ANY(:refs)")
+            rows = c.execute(q, {"refs": refs}).mappings().all()
+        return [dict(r) for r in rows]
 # -------------------- Existing API (unchanged logic) --------------------
 
 def df_read(sql: str, params: dict | None = None) -> pd.DataFrame:
