@@ -21,7 +21,7 @@ if not DB_URL:
 
 # Ensure the psycopg2 dialect so libpq connect args work
 if DB_URL.startswith("postgresql://"):
-    _DB_URL = "postgresql+psycopg2://" + DB_URL[len("postgresql://") :]
+    DB_URL = "postgresql+psycopg2://" + DB_URL[len("postgresql://") :]
 
 # Extract hostname for SNI/cert verification (keeps TLS happy even when forcing IPv4)
 parsed = urlparse(DB_URL.replace("+psycopg2", ""))  # scheme part not needed for parsing netloc
@@ -56,7 +56,7 @@ def _conn():
 def ensure_vendor_email_tables() -> None:
     """Create vendor_contacts + requirement_mail_log if they don't exist."""
     with _conn() as c:
-        if _DB_URL.startswith("sqlite"):
+        if DB_URL.startswith("sqlite"):
             c.execute(text("""
                 CREATE TABLE IF NOT EXISTS vendor_contacts (
                   vendor_key TEXT PRIMARY KEY,
@@ -118,7 +118,7 @@ def upsert_vendor_contact(vendor: str, email: str, by_email: str | None = None) 
     if not vendor or not email:
         raise ValueError("vendor and email are required")
     with _conn() as c:
-        if _DB_URL.startswith("sqlite"):
+        if DB_URL.startswith("sqlite"):
             c.execute(text("""
                 INSERT INTO vendor_contacts(vendor_key, email, created_by, updated_by)
                 VALUES (:v, :e, :by, :by)
@@ -146,7 +146,7 @@ def get_vendor_email(vendor: str) -> str | None:
 def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: bool, error: str | None = None) -> None:
     """Audit log for outgoing requirement emails."""
     with _conn() as c:
-        if _DB_URL.startswith("sqlite"):
+        if DB_URL.startswith("sqlite"):
             c.execute(text("""
                 INSERT INTO requirement_mail_log(ref, vendor_key, email, subject, ok, error)
                 VALUES (:ref, :vendor, :email, :subject, :ok, :error)
@@ -177,7 +177,7 @@ def update_requirement_status(refs: list[str], status: str, approver_email: str,
              WHERE ref = ANY(:refs)
         """)
         # For SQLite fallback, ANY(..) is unsupported — use simple IN
-        if _DB_URL.startswith("sqlite"):
+        if DB_URL.startswith("sqlite"):
             q = text("""
                 UPDATE requirements_log
                    SET status = :st,
@@ -193,7 +193,7 @@ def update_requirement_status(refs: list[str], status: str, approver_email: str,
 def read_requirements_by_refs(refs: list[str]) -> list[dict]:
     if not refs: return []
     with _conn() as c:
-        if _DB_URL.startswith("sqlite"):
+        if DB_URL.startswith("sqlite"):
             q = text("SELECT * FROM requirements_log WHERE ref IN (%s)" % ",".join("?"*len(refs)))
             rows = c.execute(q, refs).mappings().all()
         else:
