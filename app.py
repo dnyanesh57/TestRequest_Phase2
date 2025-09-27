@@ -15,7 +15,7 @@ from db_adapter import (
     read_vendor_contacts, upsert_vendor_contact, get_vendor_email,
     log_requirement_email, ensure_vendor_email_tables,
     ensure_approval_recipient_tables, read_approval_recipients,
-    mark_vendor_emailed, # Add these with your other db_adapter imports:
+    mark_vendor_emailed, ensure_reqlog_email_columns, # Add these with your other db_adapter imports:
     upsert_approval_recipient, delete_approval_recipient, list_approver_emails,
 
     
@@ -102,6 +102,12 @@ try:
     ensure_approval_recipient_tables()
 except Exception as e:
     st.error(f"DB init (approval recipients) failed: {e}")
+
+# Ensure reqlog email columns exist
+try:
+    ensure_reqlog_email_columns()
+except Exception as e:
+    st.warning(f"Could not verify emailed_* columns on requirements_log: {e}")
 
 # Ensure approver recipients table exists
 try:
@@ -1662,7 +1668,9 @@ def _send_vendor_emails_for_refs(refs: list[str]):
 
     if sent_ok:
         st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
-        mark_vendor_emailed(refs, st.session_state.user.get("email",""))
+        # Mark only the successfully emailed refs
+        emailed_refs = [r["ref"] for r in rows if _can_send_vendor_email(str(r.get("status","")))]
+        mark_vendor_emailed(emailed_refs, st.session_state.user.get("email",""))
     if sent_err:
         st.error("Some vendor emails failed: " + "; ".join(sent_err))
 

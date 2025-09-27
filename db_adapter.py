@@ -479,6 +479,62 @@ def list_approver_emails(project_code: str|None, vendor_key: str|None, request_t
                 seen.add(em); out.append(em)
         return out
 
+# --- Ensure emailed_* columns exist on requirements_log ---
+def ensure_reqlog_email_columns() -> None:
+    """
+    Adds emailed_vendor_at, emailed_vendor_by columns to requirements_log if missing.
+    Works for Postgres and SQLite.
+    """
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            # Try creating columns; SQLite doesn't support IF NOT EXISTS for columns—wrap in try/except.
+            try:
+                c.execute(text("ALTER TABLE requirements_log ADD COLUMN emailed_vendor_at TEXT"))
+            except Exception:
+                pass
+            try:
+                c.execute(text("ALTER TABLE requirements_log ADD COLUMN emailed_vendor_by TEXT"))
+            except Exception:
+                pass
+        else:
+            c.execute(text("""
+                ALTER TABLE requirements_log
+                ADD COLUMN IF NOT EXISTS emailed_vendor_at TIMESTAMPTZ
+            """))
+            c.execute(text("""
+                ALTER TABLE requirements_log
+                ADD COLUMN IF NOT EXISTS emailed_vendor_by TEXT
+            """))
+
+def mark_vendor_emailed(refs: list[str], by_email: str) -> None:
+    """
+    Set emailed_vendor_at (now) and emailed_vendor_by for the given refs.
+    """
+    if not refs:
+        return
+
+    ensure_reqlog_email_columns()
+
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            # Build a dynamic IN (?, ?, ?)
+            placeholders = ",".join("?" * len(refs))
+            q = text(f"""
+                UPDATE requirements_log
+                   SET emailed_vendor_at = datetime('now'),
+                       emailed_vendor_by = ?
+                 WHERE ref IN ({placeholders})
+            """)
+            c.execute(q, [by_email] + refs)
+        else:
+            q = text("""
+                UPDATE requirements_log
+                   SET emailed_vendor_at = NOW(),
+                       emailed_vendor_by = :by
+                 WHERE ref = ANY(:refs)
+            """)
+            c.execute(q, {"by": by_email, "refs": refs})
+
 def read_reqlog_df() -> pd.DataFrame:
     _ensure_requirements_log_table() # Ensure table exists before reading
     return df_read("select * from requirements_log order by generated_at desc")
