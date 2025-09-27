@@ -1,11 +1,12 @@
 # db_adapter.py
 from __future__ import annotations
-import json, os
+import os
+import json
 from urllib.parse import urlparse
 from contextlib import contextmanager
 import datetime as dt
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 
 # ---- Read URL (from Streamlit secrets first, else env) ----
 try:
@@ -13,7 +14,7 @@ try:
     DB_URL = st.secrets["db"]["url"]
     SUPABASE_IPV4 = st.secrets["db"].get("ipv4", os.getenv("SUPABASE_IPV4", ""))  # optional
 except Exception: # Fallback for local development without Streamlit secrets
-    DB_URL = os.getenv("DB_URL")
+    DB_URL = os.getenv("DATABASE_URL") or os.getenv("DB_URL") or "sqlite:///sjcpl.db"
     SUPABASE_IPV4 = os.getenv("SUPABASE_IPV4", "")
     
 if not DB_URL:
@@ -44,7 +45,7 @@ connect_args = {
 }
 
 # Single global engine (do not create engines elsewhere)
-_engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True)
+_engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True, future=True)
 
 # --- Add these imports at the top of db_adapter.py ---
 
@@ -202,7 +203,7 @@ def read_requirements_by_refs(refs: list[str]) -> list[dict]:
         return [dict(r) for r in rows]
 # -------------------- Existing API (unchanged logic) --------------------
 
-def df_read(sql: str, params: dict | None = None) -> pd.DataFrame:
+def df_read(sql: str, params: dict | None = None) -> pd.DataFrame: # type: ignore
     with _engine.begin() as cx:
         return pd.read_sql(text(sql), cx, params=params or {})
 
@@ -280,7 +281,11 @@ def upsert_requirements(rows: list[dict]) -> None:
     with _engine.begin() as cx:
         for r in rows:
             cx.execute(sql, r)
-
+def _table_exists(table_name: str) -> bool:
+    with _engine.connect() as connection:
+        inspector = inspect(connection)
+        return table_name in inspector.get_table_names()
+        
 def read_acl_df() -> pd.DataFrame:
     return df_read("select * from acl_users")
 
@@ -291,7 +296,7 @@ def write_acl_df(df: pd.DataFrame):
 
 def ensure_approval_recipient_tables() -> None:
     """Create approval_recipients table if it doesn't exist."""
-    with _conn() as c:
+    with _conn() as c: # type: ignore
         if DB_URL.startswith("sqlite"):
             c.execute(text("""
                 CREATE TABLE IF NOT EXISTS approval_recipients (
@@ -300,7 +305,9 @@ def ensure_approval_recipient_tables() -> None:
                   vendor_key TEXT NOT NULL,
                   request_type TEXT NOT NULL,
                   email TEXT NOT NULL,
-                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')), 
+                  updated_at TEXT NOT NULL DEFAULT (datetime('now')), 
+                  updated_by TEXT,
                   created_by TEXT,
                   UNIQUE (project_code, vendor_key, request_type, email)
                 )
@@ -313,7 +320,9 @@ def ensure_approval_recipient_tables() -> None:
                   vendor_key TEXT NOT NULL,
                   request_type TEXT NOT NULL,
                   email TEXT NOT NULL,
-                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), 
+                  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), 
+                  updated_by TEXT,
                   created_by TEXT,
                   UNIQUE (project_code, vendor_key, request_type, email)
                 )
@@ -324,34 +333,81 @@ def read_approval_recipients() -> pd.DataFrame:
     with _conn() as c:
         rows = c.execute(text("SELECT * FROM approval_recipients ORDER BY project_code, vendor_key, request_type, email")).mappings().all()
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["id", "project_code", "vendor_key", "request_type", "email", "created_at", "created_by"])
-
-def upsert_approval_recipient(project_code: str, vendor_key: str, request_type: str, email: str, created_by: str | None = None) -> None:
-    """Add or update an approval recipient."""
-    with _conn() as c:
-        if DB_URL.startswith("sqlite"):
-            c.execute(text("""
-                INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by)
-                VALUES (:pc, :vk, :rt, :e, :cb)
-                ON CONFLICT (project_code, vendor_key, request_type, email) DO NOTHING
-            """), {"pc": project_code, "vk": vendor_key, "rt": request_type, "e": email, "cb": created_by})
+        
+def upsert_approval_recipient(project_code: str|None, vendor_key: str|None, \
+                              request_type: str|None, email: str, \
+                              by_email: str|None=None, rec_id: int|None=None) -> None:
+    """
+    Insert/update an approval recipient. If rec_id is provided -> update; else insert new.
+    """
+    with _conn() as c: # type: ignore
+        if rec_id:
+            if DB_URL.startswith("sqlite"):
+                c.execute(text("""
+                    UPDATE approval_recipients
+                       SET project_code=:pc, vendor_key=:vk, request_type=:rt, email=:em,
+                           updated_at=datetime('now'), updated_by=:by 
+                     WHERE id=:id
+                """), {"pc":project_code, "vk":vendor_key, "rt":request_type, "em":email, "by":by_email, "id":rec_id})
+            else:
+                c.execute(text("""
+                    UPDATE approval_recipients
+                       SET project_code=:pc, vendor_key=:vk, request_type=:rt, email=:em,
+                           updated_at=NOW(), updated_by=:by 
+                     WHERE id=:id
+                """), {"pc":project_code, "vk":vendor_key, "rt":request_type, "em":email, "by":by_email, "id":rec_id})
         else:
-            c.execute(text("""
-                INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by)
-                VALUES (:pc, :vk, :rt, :e, :cb)
-                ON CONFLICT (project_code, vendor_key, request_type, email) DO NOTHING
-            """), {"pc": project_code, "vk": vendor_key, "rt": request_type, "e": email, "cb": created_by})
+            if DB_URL.startswith("sqlite"):
+                c.execute(text("""
+                    INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by, updated_by)
+                    VALUES (:pc, :vk, :rt, :em, :by, :by)
+                """), {"pc":project_code, "vk":vendor_key, "rt":request_type, "em":email, "by":by_email})
+            else:
+                c.execute(text("""
+                    INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by, updated_by)
+                    VALUES (:pc, :vk, :rt, :em, :by, :by)
+                """), {"pc":project_code, "vk":vendor_key, "rt":request_type, "em":email, "by":by_email})
 
-def delete_approval_recipient(recipient_id: int) -> None:
+def delete_approval_recipient(rec_id: int) -> None:
     """Delete an approval recipient by ID."""
-    with _conn() as c:
-        c.execute(text("DELETE FROM approval_recipients WHERE id = :id"), {"id": recipient_id})
+    with _conn() as c: # type: ignore
+        c.execute(text("DELETE FROM approval_recipients WHERE id=:id"), {"id": rec_id})
 
-def list_approver_emails(project_code: str, vendor_key: str, request_type: str) -> list[str]:
+def list_approver_emails(project_code: str|None, vendor_key: str|None, request_type: str|None) -> list[str]:
     """List emails of approvers for a given project, vendor, and request type."""
-    with _conn() as c:
-        rows = c.execute(text("SELECT email FROM approval_recipients WHERE project_code = :pc AND vendor_key = :vk AND request_type = :rt"),
-                         {"pc": project_code, "vk": vendor_key, "rt": request_type}).scalars().all()
-        return list(rows)
+    with _conn() as c: # type: ignore
+        q = text("""
+            SELECT DISTINCT email, 3 as prio FROM approval_recipients 
+              WHERE (project_code = :pc) AND (vendor_key = :vk) AND (request_type = :rt)
+            UNION
+            SELECT DISTINCT email, 2 FROM approval_recipients 
+              WHERE (project_code = :pc) AND (vendor_key = :vk) AND (request_type IS NULL)
+            UNION
+            SELECT DISTINCT email, 2 FROM approval_recipients 
+              WHERE (project_code = :pc) AND (vendor_key IS NULL) AND (request_type = :rt)
+            UNION
+            SELECT DISTINCT email, 2 FROM approval_recipients 
+              WHERE (project_code IS NULL) AND (vendor_key = :vk) AND (request_type = :rt)
+            UNION
+            SELECT DISTINCT email, 1 FROM approval_recipients 
+              WHERE (project_code = :pc) AND (vendor_key IS NULL) AND (request_type IS NULL)
+            UNION
+            SELECT DISTINCT email, 1 FROM approval_recipients 
+              WHERE (project_code IS NULL) AND (vendor_key = :vk) AND (request_type IS NULL)
+            UNION
+            SELECT DISTINCT email, 1 FROM approval_recipients 
+              WHERE (project_code IS NULL) AND (vendor_key IS NULL) AND (request_type = :rt)
+            UNION
+            SELECT DISTINCT email, 0 FROM approval_recipients 
+              WHERE (project_code IS NULL) AND (vendor_key IS NULL) AND (request_type IS NULL)
+        """)
+        rows = c.execute(q, {"pc": project_code, "vk": vendor_key, "rt": request_type}).mappings().all()
+        seen, out = set(), []
+        for r in sorted(rows, key=lambda x: x["prio"], reverse=True):
+            em = r["email"]
+            if em and em not in seen:
+                seen.add(em); out.append(em)
+        return out
 
 def read_reqlog_df() -> pd.DataFrame:
     return df_read("select * from requirements_log order by generated_at desc")
