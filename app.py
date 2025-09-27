@@ -15,6 +15,7 @@ from db_adapter import (
     read_vendor_contacts, upsert_vendor_contact, get_vendor_email,
     log_requirement_email, ensure_vendor_email_tables,
     ensure_approval_recipient_tables, read_approval_recipients,
+    # Add these with your other db_adapter imports:
     upsert_approval_recipient, delete_approval_recipient, list_approver_emails,
 
     
@@ -101,6 +102,12 @@ try:
     ensure_approval_recipient_tables()
 except Exception as e:
     st.error(f"DB init (approval recipients) failed: {e}")
+
+# Ensure approver recipients table exists
+try:
+ ensure_approval_recipient_tables()
+except Exception as e:
+ st.error(f"DB init (approval recipients) failed: {e}")
 
 # SMTP + mail helpers (add once, top-level)
 from email.mime.text import MIMEText
@@ -2511,6 +2518,7 @@ for i, tab_label in enumerate(visible_tabs):
                         except Exception as e:
                             st.error(f"Failed to update status: {e}")
 
+
                         # 3) (Optional) On Approve: send vendor email with a combined PDF of selected refs
                         if do_approve and send_vendor_after_approve:
                             # Pull rows back to build the PDF & get vendor/project info
@@ -2674,6 +2682,73 @@ for i, tab_label in enumerate(visible_tabs):
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
 
+                with st.expander("✅ Approval Recipients (master admin)"):
+                    st.caption("Recipients here will receive emails when a request is Pending Admin Approval.")
+                    # Load current recipients
+                    try:
+                        arec = read_approval_recipients()
+                    except Exception as e:
+                        arec = pd.DataFrame(columns=["id","project_code","vendor_key","request_type","email"])
+                        st.error(f"Failed to read approval recipients: {e}")
+
+                    # Show table
+                    st.dataframe(
+                        arec if not arec.empty else pd.DataFrame(columns=["id","project_code","vendor_key","request_type","email"]),
+                        use_container_width=True, hide_index=True
+                    )
+
+                    # Add / Update (in a form to avoid mid-typing reruns)
+                    with st.form("appr-edit-form", clear_on_submit=False):
+                        st.markdown("**Add / Update recipient**")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            rec_id = st.number_input("Record ID (0 = create new)", min_value=0, value=0, step=1, key="appr-id")
+                            pc = st.text_input("Project Code (optional)", key="appr-pc")
+                            vk = st.text_input("Vendor Key (Subcontractor_Key, optional)", key="appr-vk")
+                        with c2:
+                            rt = st.text_input("Request Type (optional, e.g. QCTest)", key="appr-rt")
+                            em = st.text_input("Approver Email (required)", key="appr-email")
+                            save_btn = st.form_submit_button("Save Recipient", type="primary")
+                        if save_btn:
+                            if not em.strip():
+                                st.error("Email is required.")
+                            else:
+                                try:
+                                    upsert_approval_recipient(
+                                        pc.strip() or None, vk.strip() or None, rt.strip() or None,
+                                        em.strip(), by_email=st.session_state.get("user",{}).get("email"),
+                                        rec_id=(rec_id or None)
+                                    )
+                                    st.success("Saved.")
+                                    st.experimental_rerun()
+                                except Exception as e:
+                                    st.error(f"Save failed: {e}")
+
+                    # Delete (separate form)
+                    with st.form("appr-del-form"):
+                        del_id = st.number_input("Delete by ID", min_value=0, value=0, step=1, key="appr-del-id")
+                        del_btn = st.form_submit_button("Delete Recipient")
+                        if del_btn:
+                            try:
+                                if del_id > 0:
+                                    delete_approval_recipient(int(del_id))
+                                    st.success("Deleted.")
+                                    st.experimental_rerun()
+                                else:
+                                    st.warning("Enter a valid ID (> 0).")
+                            except Exception as e:
+                                st.error(f"Delete failed: {e}")
+
+                    st.markdown("""
+                    <div style="font-size:12px;color:#555;line-height:1.5">
+                        <b>Scoping rules (most specific → least):</b><br/>
+                        (project_code, vendor_key, request_type) → (project_code, vendor_key, NULL) →
+                        (project_code, NULL, request_type) → (NULL, vendor_key, request_type) →
+                        (project_code, NULL, NULL) → (NULL, vendor_key, NULL) →
+                        (NULL, NULL, request_type) → (NULL, NULL, NULL).
+                    </div>
+                    """, unsafe_allow_html=True)
+                    st.error(f"Delete failed: {e}")
                 # Add SMTP Diagnostics
                 def smtp_connectivity_check():
                     ok, cfg = _smtp_config_ok()
