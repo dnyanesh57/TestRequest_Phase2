@@ -147,7 +147,7 @@ def build_vendor_email_html(row: dict) -> str:
     dt_gen = row.get("generated_at","")
     return f"""
     <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
-      <p>Dear Vendor (<b>{vendor}</b>),</p>
+      <p>Dear Vendor <b>{vendor}</b>,</p>
       <p>Please find attached the requirement reference <b>{ref}</b> for project <b>{proj}</b>.</p>
       <table style="border-collapse:collapse;font-size:13px;width:100%">
         <tr><td style="padding:4px 8px"><b>Type</b></td><td style="padding:4px 8px">{req_type}</td></tr>
@@ -157,7 +157,7 @@ def build_vendor_email_html(row: dict) -> str:
         <tr><td style="padding:4px 8px"><b>Generated</b></td><td style="padding:4px 8px">{dt_gen}</td></tr>
       </table>
       <p>Please review the attached PDF for full details.</p>
-      <p>Regards,<br/>SJCPL — Automated Notifications</p>
+      <p>Regards,<br/>SJCPL — Test Request and Approval</p>
     </div>
     """
 
