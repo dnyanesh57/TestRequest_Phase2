@@ -2720,7 +2720,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         rec_id=(rec_id or None)
                                     )
                                     st.success("Saved.")
-                                    st.experimental_rerun()
+                                    st.rerun()
                                 except Exception as e:
                                     st.error(f"Save failed: {e}")
 
@@ -2733,7 +2733,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 if del_id > 0:
                                     delete_approval_recipient(int(del_id))
                                     st.success("Deleted.")
-                                    st.experimental_rerun()
+                                    st.rerun()
                                 else:
                                     st.warning("Enter a valid ID (> 0).")
                             except Exception as e:
