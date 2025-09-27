@@ -2378,7 +2378,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         st.error(f"Email send failed: {msg}")
 
                             # --- Email approvers for rows that require approval ---
-                            try:
+                            try: # Patch 1
                                 # Collect rows needing approval
                                 needing_approval = [r for r in used_rows if str(r.get("status","")).startswith("Pending")]
                                 if needing_approval:
@@ -2387,7 +2387,8 @@ for i, tab_label in enumerate(visible_tabs):
                                     pc = first_row.get("project_code")
                                     vk = first_row.get("vendor")
                                     rt = first_row.get("request_type")
-
+                                    requester_name = first_row.get("generated_by_name", "Requester")
+                                    
                                     approver_emails = list_approver_emails(pc, vk, rt)
                                     if not approver_emails:
                                         st.warning("No approval recipients configured for this scope. Add them in Admin → Approval Recipients.")
@@ -2404,7 +2405,7 @@ for i, tab_label in enumerate(visible_tabs):
                                             for r in needing_approval
                                         )
                                         html_body = f"""
-                                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222"> 
                                           <p>Approval required for the following request(s):</p>
                                           <table style="border-collapse:collapse;font-size:13px">
                                             <thead>
@@ -2424,7 +2425,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         </div>
                                         """
 
-                                        subject = f"[SJCPL] Approval needed — {first_row.get('project_code','')} — {len(needing_approval)} item(s)"
+                                        subject = f"[SJCPL] Approval needed — {first_row.get('project_code','')} — {len(needing_approval)} item(s) — by {requester_name}"
                                         attach_name = f"{first_row['ref'].split('/')[1]}_PendingApproval.pdf" if first_row.get("ref") else "PendingApproval.pdf"
 
                                         # Reuse the combined PDF you just created
@@ -2444,7 +2445,7 @@ for i, tab_label in enumerate(visible_tabs):
                                             st.success(f"Sent approval email to: {', '.join(approver_emails)}")
                                         else:
                                             st.error(f"Approval email failed: {msg_mail}")
-                                        st.success(f"Emailed vendor at {v_email}")
+                                        
                             except Exception as e:
                                 st.error(f"Error while sending approval email: {e}")
         elif tab_label == "My Requests":
@@ -2544,7 +2545,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 for r in rows:
                                     by_vendor[str(r.get("vendor",""))].append(r)
 
-                                sent_ok, sent_err = 0, []
+                                sent_ok, sent_err = 0, [] # Patch 2
                                 for vendor_key, bucket in by_vendor.items():
                                     v_email = None # <-- initialize so it always exists
                                     try:
