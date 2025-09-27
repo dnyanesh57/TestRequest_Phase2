@@ -15,7 +15,7 @@ from db_adapter import (
     read_vendor_contacts, upsert_vendor_contact, get_vendor_email,
     log_requirement_email, ensure_vendor_email_tables,
     
-    update_requirement_status, read_requirements_by_refs,
+    update_requirement_status, read_requirements_by_refs, _conn,
     
     read_app_settings, write_app_settings,   # NEW
 )
