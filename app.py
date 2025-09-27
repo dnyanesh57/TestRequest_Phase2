@@ -36,6 +36,7 @@ from reportlab.lib.units import mm
 # SMTP (for email drafts)
 import smtplib, ssl
 from email.mime.base import MIMEBase
+from email.mime.multipart import MIMEMultipart
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 
 # ----------------------------- Brand / Theme -----------------------------
@@ -91,15 +92,14 @@ except Exception as e:
     st.error(f"DB init (vendor email tables) failed: {e}")
 
 # SMTP + mail helpers (add once, top-level)
-from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
+
 def _smtp_config_ok() -> tuple[bool, dict]:
     """
     Read SMTP settings from st.secrets without mutating it.
-    Returns: (ok, cfg) where cfg has normalized keys and defaults applied.
-    Required keys: host, port, user, password, from_email
-    Optional: from_name (defaults to 'SJCPL Notifications')
+    Required: host, port, user, password, from_email
+    Optional: from_name (default), force_ssl (bool), timeout (int seconds)
     """
     raw = (st.secrets.get("smtp", {}) or {})
     port_val = raw.get("port", 587)
@@ -107,9 +107,34 @@ def _smtp_config_ok() -> tuple[bool, dict]:
         port = int(str(port_val).strip())
     except Exception:
         port = 587
-    cfg = {"host": raw.get("host"), "port": port, "user": raw.get("user"), "password": raw.get("password"), "from_email": raw.get("from_email"), "from_name": (raw.get("from_name") or "SJCPL Notifications")}
-    ok = all(cfg.get(k) for k in ["host", "port", "user", "password", "from_email"])
+    cfg = {
+        "host": raw.get("host"),
+        "port": port,
+        "user": raw.get("user"),
+        "password": raw.get("password"),
+        "from_email": raw.get("from_email"),
+        "from_name": (raw.get("from_name") or "SJCPL Notifications"),
+        "force_ssl": bool(raw.get("force_ssl", False)),
+        "timeout": int(raw.get("timeout", 20)),
+    }
+    ok = all(cfg.get(k) for k in ["host","port","user","password","from_email"])
     return ok, cfg
+
+def _build_mime_message(cfg: dict, to_email: str, subject: str, html_body: str,
+                        attachment_bytes: bytes | None, attachment_name: str | None) -> MIMEMultipart:
+    msg = MIMEMultipart()
+    msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
+    msg["To"] = to_email
+    msg["Subject"] = subject
+    msg.attach(MIMEText(html_body or "", "html"))
+    if attachment_bytes:
+        part = MIMEBase("application", "pdf")
+        part.set_payload(attachment_bytes)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{attachment_name or "attachment.pdf"}"')
+        msg.attach(part)
+    return msg
+
 def build_vendor_email_html(row: dict) -> str:
     proj = row.get("project_name") or row.get("project_code") or ""
     ref = row.get("ref","")
@@ -117,51 +142,83 @@ def build_vendor_email_html(row: dict) -> str:
     vendor = row.get("vendor","")
     desc = row.get("description","")
     uom = row.get("uom","")
-    qty = row.get("qty","")
+    qty = f"{row.get('qty',''):.2f}" if isinstance(row.get('qty'), (int, float)) else str(row.get('qty',''))
     stage = row.get("stage","")
     dt_gen = row.get("generated_at","")
     return f"""
     <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
       <p>Dear Vendor (<b>{vendor}</b>),</p>
       <p>Please find attached the requirement reference <b>{ref}</b> for project <b>{proj}</b>.</p>
-      <table style="border-collapse:collapse;font-size:13px">
+      <table style="border-collapse:collapse;font-size:13px;width:100%">
         <tr><td style="padding:4px 8px"><b>Type</b></td><td style="padding:4px 8px">{req_type}</td></tr>
         <tr><td style="padding:4px 8px"><b>Item</b></td><td style="padding:4px 8px">{desc}</td></tr>
         <tr><td style="padding:4px 8px"><b>Qty</b></td><td style="padding:4px 8px">{qty} {uom}</td></tr>
         <tr><td style="padding:4px 8px"><b>Stage</b></td><td style="padding:4px 8px">{stage or '-'}</td></tr>
         <tr><td style="padding:4px 8px"><b>Generated</b></td><td style="padding:4px 8px">{dt_gen}</td></tr>
       </table>
+      <p>Please review the attached PDF for full details.</p>
       <p>Regards,<br/>SJCPL — Automated Notifications</p>
     </div>
     """
 
 def send_email_via_smtp(to_email: str, subject: str, html_body: str,
-                        attachment_bytes: bytes, attachment_name: str) -> tuple[bool, str]:
+                        attachment_bytes: bytes | None, attachment_name: str | None) -> tuple[bool, str]:
+    """
+    Robust sender:
+      - STARTTLS on cfg.port (default 587)
+      - Fallback to implicit SSL on 465 if connection is closed or fails
+      - Proper EHLO -> STARTTLS -> EHLO sequence
+      - Clear error messages for common Gmail misconfig
+    """
     ok, cfg = _smtp_config_ok()
     if not ok:
-        return False, "SMTP is not configured in secrets. Add [smtp] settings."
-    try:
-        msg = MIMEMultipart()
-        msg["From"] = f"{cfg['from_name']} <{cfg['from_email']}>"
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(html_body, "html"))
+        return False, "SMTP is not configured. Add [smtp] to .streamlit/secrets.toml (host, port, user, password, from_email)."
 
-        if attachment_bytes:
-            part = MIMEBase("application", "pdf")
-            part.set_payload(attachment_bytes)
-            encoders.encode_base64(part)
-            part.add_header("Content-Disposition", f'attachment; filename="{attachment_name}"')
-            msg.attach(part)
+    # Gmail sanity check (common source of ‘connection closed’ during auth)
+    if "gmail.com" in (cfg["host"] or "").lower():
+        # App Password (not account password) is required if 2FA is on, and FROM must match USER.
+        if cfg["from_email"].lower() != cfg["user"].lower():
+            return False, "Gmail requires from_email == user. Set both to the same Gmail address."
+    msg = _build_mime_message(cfg, to_email, subject, html_body, attachment_bytes, attachment_name)
 
-        context = ssl.create_default_context()
-        with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
+    context = ssl.create_default_context()
+    last_err = None
+
+    def _try_starttls():
+        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=cfg["timeout"]) as server:
+            server.ehlo()
             server.starttls(context=context)
+            server.ehlo()
             server.login(cfg["user"], cfg["password"])
             server.sendmail(cfg["from_email"], [to_email], msg.as_string())
-        return True, "sent"
-    except Exception as e:
-        return False, str(e)
+
+    def _try_ssl_465():
+        with smtplib.SMTP_SSL(cfg["host"], 465, timeout=cfg["timeout"], context=context) as server:
+            server.ehlo()
+            server.login(cfg["user"], cfg["password"])
+            server.sendmail(cfg["from_email"], [to_email], msg.as_string())
+
+    try:
+        if cfg["force_ssl"]:
+            _try_ssl_465()
+            return True, "sent via SSL:465"
+        # First try STARTTLS (587 or user-specified)
+        _try_starttls()
+        return True, f"sent via STARTTLS:{cfg['port']}"
+    except (smtplib.SMTPServerDisconnected, smtplib.SMTPException, OSError) as e:
+        last_err = e
+        # Fallback to implicit SSL:465
+        try:
+            _try_ssl_465()
+            return True, "sent via SSL:465 (fallback)"
+        except Exception as e2:
+            # Compose helpful message
+            hint = []
+            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower():
+                hint.append("Network timeout—your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
+            if "gmail" in (cfg["host"] or "").lower():
+                hint.append("For Gmail: use an App Password, and set from_email == user.")
+            return False, f"{type(e2).__name__}: {e2}. Prior: {type(last_err).__name__}: {last_err}. " + (" ".join(hint) if hint else "")
 
 if "app_settings" not in st.session_state:
     st.session_state.app_settings = {
@@ -2438,6 +2495,29 @@ for i, tab_label in enumerate(visible_tabs):
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
+
+                # Add SMTP Diagnostics
+                def smtp_connectivity_check():
+                    ok, cfg = _smtp_config_ok()
+                    if not ok:
+                        st.error("SMTP not configured. Please fill .streamlit/secrets.toml [smtp].")
+                        return
+                    st.write(f"Host: {cfg['host']}  Port: {cfg['port']}  From: {cfg['from_email']}")
+                    try:
+                        # Try STARTTLS on configured port
+                        import smtplib, ssl, socket
+                        context = ssl.create_default_context()
+                        with smtplib.SMTP(cfg["host"], cfg["port"], timeout=cfg["timeout"]) as s:
+                            s.ehlo()
+                            s.starttls(context=context)
+                            s.ehlo()
+                        st.success(f"STARTTLS connection OK on {cfg['host']}:{cfg['port']}")
+                    except Exception as e:
+                        st.warning(f"STARTTLS check failed on {cfg['host']}:{cfg['port']} → {e}")
+                with st.expander("📮 SMTP Diagnostics"):
+                    if st.button("Run SMTP connectivity check"):
+                        smtp_connectivity_check()
+                    st.caption("Tip: If both checks fail, your host likely blocks SMTP egress. Use an email API (SendG")
 
 
 
