@@ -1563,30 +1563,133 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
 
 def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company_meta: Dict):
     st.subheader("My Requests & Logs")
-    df = ensure_registry_columns(reqlog_df)
+
+    df = ensure_registry_columns(reqlog_df).copy()
     mine = df[df["generated_by_email"] == user_email].copy()
+
     if mine.empty:
         st.info("You haven't generated any requests yet.")
         return
 
-    # NEW: Send Vendor Email (only Approved / Auto Approved)
-    with st.expander("📧 Send Email to Vendor (Approved items only)", expanded=True):
-        sendable_refs = mine[mine["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
+    # ---------- Quick summary tiles ----------
+    total = len(mine)
+    n_pend = int((mine["status"].astype(str).str.startswith("Pending")).sum())
+    n_appr = int((mine["status"] == "Approved").sum())
+    n_auto = int((mine["status"] == "Auto Approved").sum())
+    n_rej  = int((mine["status"] == "Rejected").sum())
+
+    cA, cB, cC, cD, cE = st.columns(5)
+    cA.metric("Total requests", total)
+    cB.metric("Pending", n_pend)
+    cC.metric("Approved", n_appr)
+    cD.metric("Auto Approved", n_auto)
+    cE.metric("Rejected", n_rej)
+
+    # ---------- Filters ----------
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        status_pick = st.multiselect("Status", sorted(mine["status"].dropna().unique()), default=[])
+    with f2:
+        proj_pick = st.multiselect("Project", sorted(mine["project_code"].dropna().unique()), default=[])
+    with f3:
+        vendor_pick = st.multiselect("Vendor", sorted(mine["vendor"].dropna().unique()), default=[])
+
+    view = mine.copy()
+    if status_pick:
+        view = view[view["status"].isin(status_pick)]
+    if proj_pick:
+        view = view[view["project_code"].isin(proj_pick)]
+    if vendor_pick:
+        view = view[view["vendor"].isin(vendor_pick)]
+
+    # ---------- Request Log (tabular) ----------
+    st.markdown("### Request Log")
+    log_cols = [
+        "generated_at","ref","project_code","vendor","request_type",
+        "description","qty","uom","status","approver","approved_at"
+    ]
+    # Safe subset + ordering
+    show = [c for c in log_cols if c in view.columns]
+    log = view[show].copy().sort_values("generated_at", ascending=False)
+
+    # Pretty status chips (simple HTML)
+    def _chip(s: str) -> str:
+        s = str(s or "")
+        if s == "Approved":
+            bg = "#e6ffed"; fg = "#067d2e"
+        elif s == "Auto Approved":
+            bg = "#e6f4ff"; fg = "#0b5394"
+        elif s.startswith("Pending"):
+            bg = "#fff4e5"; fg = "#9a6700"
+        elif s == "Rejected":
+            bg = "#ffe6e6"; fg = "#a40000"
+        else:
+            bg = "#f2f2f2"; fg = "#444"
+        return f"<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:{bg};color:{fg};font-weight:600;font-size:12px'>{s}</span>"
+
+    # Render a compact HTML table for a cleaner status look (while keeping a CSV below)
+    html_rows = []
+    for _, r in log.iterrows():
+        html_rows.append(
+            f"<tr>"
+            f"<td style='padding:6px 8px;white-space:nowrap'>{r.get('generated_at','')}</td>"
+            f"<td style='padding:6px 8px'>{r.get('ref','')}</td>"
+            f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
+            f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
+            f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
+            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('…' if len(str(r.get('description',''))) > 80 else ''))}</td>"
+            f"<td style='padding:6px 8px; text-align:right'>{r.get('qty','')} {r.get('uom','')}</td>"
+            f"<td style='padding:6px 8px'>{_chip(r.get('status'))}</td>"
+            f"<td style='padding:6px 8px'>{r.get('approver','')}</td>"
+            f"<td style='padding:6px 8px;white-space:nowrap'>{r.get('approved_at','')}</td>"
+            f"</tr>"
+        )
+    log_html = f"""
+    <div style="overflow:auto">
+      <table style="border-collapse:collapse;font-size:13px;min-width:900px">
+        <thead>
+          <tr style="background:#f6f8fa">
+            <th style="padding:6px 8px;text-align:left;white-space:nowrap">Generated</th>
+            <th style="padding:6px 8px;text-align:left">Ref</th>
+            <th style="padding:6px 8px;text-align:left">Project</th>
+            <th style="padding:6px 8px;text-align:left">Vendor</th>
+            <th style="padding:6px 8px;text-align:left">Type</th>
+            <th style="padding:6px 8px;text-align:left">Item</th>
+            <th style="padding:6px 8px;text-align:right">Qty</th>
+            <th style="padding:6px 8px;text-align:left">Status</th>
+            <th style="padding:6px 8px;text-align:left">Approver</th>
+            <th style="padding:6px 8px;text-align:left;white-space:nowrap">Approved At</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(html_rows) if html_rows else "<tr><td colspan='10' style='padding:8px;color:#666'>No rows</td></tr>"}
+        </tbody>
+      </table>
+    </div>
+    """
+    st.markdown(log_html, unsafe_allow_html=True)
+
+    # Export current view
+    st.download_button(
+        "⬇️ Download my request log (CSV)",
+        data=view[show].to_csv(index=False).encode("utf-8"),
+        file_name="my_requests_log.csv",
+        mime="text/csv",
+        key="myreq-log-dl"
+    )
+
+    # ---------- Send Email to Vendor (Approved only) ----------
+    st.markdown("---")
+    with st.expander("📧 Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
+        sendable_refs = view[view["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
         if not sendable_refs:
-            st.caption("No Approved / Auto Approved requests in your list.")
+            st.caption("No Approved / Auto Approved requests in the current list.")
         else:
             sel_refs = st.multiselect("Select Approved reference(s) to email", sendable_refs, default=[], key="myreq-email-refs")
             if st.button("Send email to vendor", type="primary", key="myreq-email-btn"):
                 _send_vendor_emails_for_refs(sel_refs)
-        return
-    c1, c2 = st.columns(2)
-    with c1:
-        status_pick = st.multiselect("Status filter", sorted(mine["status"].dropna().unique()), default=[])
-    with c2:
-        vendor_pick = st.multiselect("Vendor filter", sorted(mine["vendor"].dropna().unique()), default=[])
-    if status_pick: mine = mine[mine["status"].isin(status_pick)]
-    if vendor_pick: mine = mine[mine["vendor"].isin(vendor_pick)]
-    st.dataframe(mine.sort_values("generated_at", ascending=False), use_container_width=True, hide_index=True)
+
+    # ---------- Reprint controls (unchanged) ----------
     render_reprint_section(st, mine, company_meta, key_prefix="myreq-reprint")
 
 def _send_vendor_emails_for_refs(refs: list[str]):
