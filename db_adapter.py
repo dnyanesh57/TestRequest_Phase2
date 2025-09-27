@@ -44,7 +44,7 @@ connect_args = {
 }
 
 # Single global engine (do not create engines elsewhere)
-_engine = create_engine(_DB_URL, connect_args=connect_args, pool_pre_ping=True)
+_engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True)
 
 # --- Add these imports at the top of db_adapter.py ---
 
