@@ -943,6 +943,23 @@ def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd
         return (pd.DataFrame(), "")
 
 # ---------------------- Load ----------------------
+# 1) Stop hitting GitHub on every rerun
+# Only fetch from GitHub when the admin presses a button; otherwise reuse what’s already loaded.
+# after login/bootstrap:
+if "_raw_df_cache" not in st.session_state:
+    st.session_state._raw_df_cache = None
+    st.session_state._raw_df_meta  = ""
+
+# 2) Cache expensive transforms with explicit keys
+# compute_items() depends only on raw_df content. Hash the bytes so the cache is stable.
+@st.cache_data(show_spinner=False, max_entries=3)
+def _df_signature(df: pd.DataFrame) -> str:
+    # robust-ish signature for cache key
+    h = hashlib.sha1()
+    h.update(str(df.shape).encode())
+    h.update("|".join(df.columns.astype(str)).encode())
+    h.update(pd.util.hash_pandas_object(df.head(50), index=False).values.tobytes())
+    return h.hexdigest()
 def load_table(upload) -> pd.DataFrame:
     if upload is None: return pd.DataFrame()
     name = upload.name.lower()
@@ -959,6 +976,24 @@ def load_table(upload) -> pd.DataFrame:
         return pd.DataFrame()
 
 # ---------------------- Transform (robust) ----------------------
+# 6) Vectorize types early (smaller & faster)
+# Cut memory + speed up groupbys.
+def _shrink(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    num_cols = ["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]
+    for c in num_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
+    cat_cols = ["Project_Key","Subcontractor_Key","WO_Key","OD_UOM","OD_Stage"]
+    for c in cat_cols:
+        if c in df.columns:
+            df[c] = df[c].astype("category")
+    return df
+
+
+
+
+
 @st.cache_data
 def compute_items(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
@@ -1043,6 +1078,17 @@ def wo_summary(items: pd.DataFrame) -> pd.DataFrame:
         Used_Qty=("Used_Qty","sum"),
         Remaining_Qty=("Remaining_Qty","sum"),
     ).reset_index()
+
+# 4) Avoid re-grouping massive DataFrames for every expander
+# Precompute once per filter and reuse.
+@st.cache_data(show_spinner=False, max_entries=10)
+def pre_aggregations(df: pd.DataFrame):
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    wo = wo_summary(df)
+    proj = wo.groupby("Project_Key", dropna=False)[["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
+    sub  = wo.groupby("Subcontractor_Key", dropna=False)[["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
+    return wo, proj, sub
 
 # ---------------------- PDF helpers ----------------------
 @st.cache_resource
@@ -1972,17 +2018,31 @@ if _user_is_master_admin():
         st.caption(f"Repo: {S.get('github_repo')} | Branch: {S.get('github_branch')} | Folder: {S.get('github_folder')}")
         st.caption("If the repo is private or you hit rate-limits, add [github].token to secrets.")
         
-if "_df_from_github" in st.session_state:
-    raw_df, source_lbl = st.session_state["_df_from_github"]
+
+
+if S["data_source"] == "github":
+    c1, c2 = st.columns([1,1])
+    with c1:
+        reload_gh = st.button("🔄 Reload from GitHub", key="gh-reload")
+    with c2:
+        st.caption(st.session_state._raw_df_meta or "No file loaded yet.")
+
+    if reload_gh or st.session_state._raw_df_cache is None:
+        gh_df, gh_status = try_load_latest_from_github(S["github_repo"], S["github_folder"], S["github_branch"])
+        st.session_state._raw_df_cache = gh_df
+        st.session_state._raw_df_meta  = gh_status or "(no file)"
+    raw_df = st.session_state._raw_df_cache
 else:
-    # fallback (manual upload path when admin allows)
-    raw_df = raw_df  # already set in sidebar block above
+    raw_df = load_table(upl) if upl else pd.DataFrame()
 if raw_df.empty:
     st.info("Upload a file to begin. Headers expected on row 3 (skip first 2 rows)."); st.stop()
 
 items_df = compute_items(raw_df)
 summary_df = wo_summary(items_df)
-
+sig = _df_signature(raw_df)
+items_df = compute_items(raw_df) # already @st.cache_data
+summary_df = wo_summary(items_df) # already cached
+items_df = _shrink(items_df)
 items_df = annotate_low(items_df, low_metric, low_threshold)
 
 # Global filters
@@ -2013,7 +2073,8 @@ mask = (
     (True if not f_wos else items_df["WO_Key"].isin(f_wos))
 )
 items_f = items_df[mask].copy()
-summary_f = wo_summary(items_f)
+items_f = _shrink(items_f)
+summary_f, proj_agg, sub_agg = pre_aggregations(items_f)
 
 user_sites = _user_allowed_sites()
 if "*" not in user_sites:
@@ -2092,13 +2153,15 @@ for i, tab_label in enumerate(visible_tabs):
                 m5.metric("Σ Revised", f"{float(s['Revised_Qty'].sum() if not s.empty else 0):,.2f}")
                 m6.metric("Low items", int(items_f["Low_Flag"].sum() if "Low_Flag" in items_f.columns else 0))
 
-                if not s.empty:
-                    proj_agg = s.groupby("Project_Key", dropna=False)[["Initial_Qty","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
+                if not proj_agg.empty:
                     st.subheader("Project-wise Quantities")
                     fig = px.bar(proj_agg.melt(id_vars="Project_Key", var_name="Kind", value_name="Qty"),
                                  x="Project_Key", y="Qty", color="Kind", barmode="group",
                                  title="Σ Quantities by Project")
                     fig.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig, use_container_width=True, key="ov-bar")
+                else:
+                    st.info("No project data to display.")
+
 
                 st.subheader("Grouped Lines — Project → Work Order")
                 q = st.text_input("Search (WO / Desc / Stage)", "", key="ov-q").strip().lower()
@@ -2123,10 +2186,13 @@ for i, tab_label in enumerate(visible_tabs):
                     key_prefix="ov", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
         elif tab_label == "Group: WO → Project":
+            # 3) Debounce text inputs (they cause a rerun on each keystroke)
+            # Wrap search fields into forms so they rerun only on submit.
             if can_view("Group: WO → Project"):
                 st.subheader("Grouped Lines — Project → Work Order")
-                q = st.text_input("Search (WO / Desc / Stage)", "", key="gp-q").strip().lower()
-                cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]
+                with st.form("group-wo-project-search"):
+                    q = st.text_input("Search (WO / Desc / Stage)", "", key="gp-q")
+                    submitted = st.form_submit_button("Apply")
                 cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="gp-cols")
                 view = items_f.copy()
                 if q:
@@ -2143,11 +2209,13 @@ for i, tab_label in enumerate(visible_tabs):
                     view, ("Project_Key","WO_Key"), cols_pick,
                     title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="gp", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
-                )
+                ) # usage: paginated_df(view[inner_cols], key="gp")
         elif tab_label == "Work Order Explorer":
             if can_view("Work Order Explorer"):
                 st.subheader("Explorer — Grouped Lines (Project → Work Order)")
-                q = st.text_input("Search (WO / Title / Desc / UOM / Stage)", "", key="ex-q").strip().lower()
+                with st.form("work-order-explorer-search"):
+                    q = st.text_input("Search (WO / Title / Desc / UOM / Stage)", "", key="ex-q")
+                    submitted = st.form_submit_button("Apply")
                 cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty","OI_Title","II_Title.1"]
                 cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE + ["II_Title.1","OI_Title"]),
                                            default=present_cols(items_f, cols_default), key="ex-cols")
@@ -2170,62 +2238,81 @@ for i, tab_label in enumerate(visible_tabs):
                     title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ex", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
+                if not submitted:
+                    q = st.session_state.get("ex-q", "")
         elif tab_label == "Lifecycle":
             if can_view("Lifecycle"):
                 st.subheader("Lifecycle (single line)")
-                if items_f.empty: st.info("No items to display.")
+                
+                if items_f.empty:
+                    st.info("No items to display.")
                 else:
-                    lq = st.text_input("Quick search (WO / Line / Desc)", "", key="lc-q").strip().lower()
-                    base = items_f.copy()
-                    if lq:
-                        base = base[
-                            base["WO_Key"].astype(str).str.lower().str.contains(lq, na=False) |
-                            base["Line_Key"].astype(str).str.lower().str.contains(lq, na=False) |
-                            base["OD_Description"].astype(str).str.lower().str.contains(lq, na=False)
-                        ]
-                    ven_opts = sorted([v for v in (base["Subcontractor_Key"].dropna().unique() if "Subcontractor_Key" in base.columns else [])])
-                    sel = st.multiselect("Vendor(s)", ven_opts, default=ven_opts, key=f"lc-vendors")
-                    if sel:
-                        base = base[base["Subcontractor_Key"].isin(sel)].copy()
+                    with st.form("lifecycle-search"):
+                        lq = st.text_input("Quick search (WO / Line / Desc)", "", key="lc-q").strip().lower()
+                        submitted = st.form_submit_button("Search")
 
-                    wo_sel = st.selectbox("Work Order", sorted(base["WO_Key"].unique()), key="lc-wo")
-                    line_opts = base.loc[base["WO_Key"]==wo_sel, "Line_Key"].dropna().unique()
-                    line_sel = st.selectbox("Line #", sorted(line_opts), key="lc-line")
-                    row = base[(base["WO_Key"]==wo_sel) & (base["Line_Key"]==line_sel)].head(1)
-                    if row.empty: st.warning("Selection not found.")
-                    else:
-                        r = row.iloc[0]
-                        c1, c2, c3 = st.columns([2,2,3])
-                        with c1:
-                            st.markdown("**Header**")
-                            st.write(f"**Project:** {r.get('Project_Key','')}")
-                            st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
-                            st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
-                            st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}")
-                            st.write(f"**Desc:** {r.get('OD_Description','')}")
-                            if r.get("Remaining_Qty", np.nan) < low_threshold:
-                                st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
-                        with c2:
-                            st.markdown("**Quantities**")
-                            st.write(f"Initial: {r['Initial_Qty']:.3f}  |  +Remeas: {r['Remeasure_Add']:.3f}")
-                            st.write(f"Revised: {r['Revised_Qty']:.3f}")
-                            st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
-                            st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
-                        with c3:
-                            st.markdown("**Instruction (II_) & Dates**")
-                            st.write(f"WO Title: {r.get('OI_Title','')}")
-                            st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
-                            st.write(f"Approval: {r.get('II_Approval Status','')}")
-                            st.write(f"WO Date: {str(r.get('OI_Date',''))}  |  II Date: {str(r.get('II_Date.1',''))}")
+                    if submitted:
+                        base = items_f.copy()
+                        if lq:
+                            base = base[
+                                base["WO_Key"].astype(str).str.lower().str.contains(lq, na=False) |
+                                base["Line_Key"].astype(str).str.lower().str.contains(lq, na=False) |
+                                base["OD_Description"].astype(str).str.lower().str.contains(lq, na=False)
+                            ]
+                        ven_opts = sorted([
+                            v for v in (
+                                base["Subcontractor_Key"].dropna().unique()
+                                if "Subcontractor_Key" in base.columns else []
+                            )
+                        ])
+                        sel = st.multiselect("Vendor(s)", ven_opts, default=ven_opts, key="lc-vendors")
 
-                        wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
-                                              "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
-                        fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
-                        fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf")
+                        if sel:
+                            filtered = base[base["Subcontractor_Key"].isin(sel)]
+                            
+                            wo_sel = st.selectbox("Work Order", sorted(filtered["WO_Key"].unique()), key="lc-wo")
+                            line_opts = filtered.loc[filtered["WO_Key"]==wo_sel, "Line_Key"].dropna().unique()
+                            line_sel = st.selectbox("Line #", sorted(line_opts), key="lc-line")
+                            row = filtered[(filtered["WO_Key"]==wo_sel) & (filtered["Line_Key"]==line_sel)].head(1)
+                            
+                            if row.empty:
+                                st.warning("Selection not found.")
+                            else:
+                                r = row.iloc[0]
+                                c1, c2, c3 = st.columns([2,2,3])
+                                with c1:
+                                    st.markdown("**Header**")
+                                    st.write(f"**Project:** {r.get('Project_Key','')}")
+                                    st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
+                                    st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
+                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}")
+                                    st.write(f"**Desc:** {r.get('OD_Description','')}")
+                                    if r.get("Remaining_Qty", np.nan) < low_threshold:
+                                        st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
+                                with c2:
+                                    st.markdown("**Quantities**")
+                                    st.write(f"Initial: {r['Initial_Qty']:.3f}  |  +Remeas: {r['Remeasure_Add']:.3f}")
+                                    st.write(f"Revised: {r['Revised_Qty']:.3f}")
+                                    st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
+                                    st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
+                                with c3:
+                                    st.markdown("**Instruction (II_) & Dates**")
+                                    st.write(f"WO Title: {r.get('OI_Title','')}")
+                                    st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
+                                    st.write(f"Approval: {r.get('II_Approval Status','')}")
+                                    st.write(f"WO Date: {str(r.get('OI_Date',''))}  |  II Date: {str(r.get('II_Date.1',''))}")
+
+                                wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
+                                                      "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
+                                fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
+                                fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
+                        else:
+                            st.warning("Please select at least one vendor.")
+
         elif tab_label == "Subcontractor Summary":
             if can_view("Subcontractor Summary"):
                 st.subheader("Subcontractor Summary")
-                if summary_f.empty: st.info("No records after filters.")
+                if sub_agg.empty: st.info("No records after filters.")
                 else:
                     sub_agg = summary_f.groupby("Subcontractor_Key", dropna=False)[["Initial_Qty","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
                     fig2 = px.bar(sub_agg.melt(id_vars="Subcontractor_Key", var_name="Kind", value_name="Qty"),
@@ -2233,7 +2320,9 @@ for i, tab_label in enumerate(visible_tabs):
                                   title="Σ Quantities by Vendor")
                     fig2.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig2, use_container_width=True, key="sub-bar")
 
-                    st.subheader("Grouped Lines — Vendor → Work Order")
+                    st.subheader("Grouped Lines — Vendor → Work Order") # type: ignore
+                with st.form("subcontractor-summary-search"):
+
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="sub-q").strip().lower()
                     cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty","Project_Key"]
                     cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE + ["Project_Key"]),
@@ -2256,10 +2345,13 @@ for i, tab_label in enumerate(visible_tabs):
                         title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                         key_prefix="sub", suppress_outer=False, thr_text=f"{low_threshold:g}"
                     )
+                submitted = st.form_submit_button("Apply")
+                if not submitted:
+                    q = st.session_state.get("sub-q", "")
         elif tab_label == "Browse":
             if can_view("Browse"):
                 st.subheader("All Renamed Columns (preview)")
-                col_search = st.text_input("Filter columns by keyword", "", key="br-q").strip().lower()
+                col_search = st.text_input("Filter columns by keyword", "", key="br-q").strip().lower() # type: ignore
                 prev = rename_with_prefix(raw_df.copy())
                 if col_search: prev = prev[[c for c in prev.columns if col_search in c.lower()]]
                 st.dataframe(prev.head(200), use_container_width=True, hide_index=True)
@@ -2273,17 +2365,17 @@ for i, tab_label in enumerate(visible_tabs):
                     view["Instruction_Available"] = view["II_Date.1"].notna() & (view["II_Date.1"] <= as_on_ts)
                 else:
                     view["Instruction_Available"] = False
-                view = annotate_low(view, low_metric, low_threshold)
-
-                q = st.text_input("Search (WO / Desc / Stage)", "", key="as-q").strip().lower()
-                cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty","Instruction_Available"]
-                cols_pick = st.multiselect("Columns to show", present_cols(view, LINE_COLS_BASE + ["Instruction_Available"]),
+                view = annotate_low(view, low_metric, low_threshold) # type: ignore
+                with st.form("status-as-on-date-search"):
+                    q = st.text_input("Search (WO / Desc / Stage)", "", key="as-q").strip().lower()
+                    cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty","Instruction_Available"]
+                    cols_pick = st.multiselect("Columns to show", present_cols(view, LINE_COLS_BASE + ["Instruction_Available"]),
                                            default=present_cols(view, cols_default), key="as-cols")
-                if q:
-                    view = view[
-                        view["WO_Key"].astype(str).str.lower().str.contains(q, na=False) |
-                        view["OD_Description"].astype(str).str.lower().str.contains(q, na=False) |
-                        view["OD_Stage"].astype(str).str.lower().str.contains(q, na=False)
+                    if q:
+                        view = view[
+                            view["WO_Key"].astype(str).str.lower().str.contains(q, na=False) |
+                            view["OD_Description"].astype(str).str.lower().str.contains(q, na=False) |
+                            view["OD_Stage"].astype(str).str.lower().str.contains(q, na=False)
                     ]
                 ven_opts = sorted([v for v in (view["Subcontractor_Key"].dropna().unique() if "Subcontractor_Key" in view.columns else [])])
                 sel = st.multiselect("Vendor(s)", ven_opts, default=ven_opts, key=f"as-vendors")
@@ -2300,7 +2392,9 @@ for i, tab_label in enumerate(visible_tabs):
                     title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="as", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
-
+                submitted = st.form_submit_button("Apply")
+                if not submitted:
+                    q = st.session_state.get("as-q", "")
                 st.download_button(
                     "Download CSV — Status as on Date (line-wise)",
                     data=view[[c for c in cols_pick if c in view.columns]].to_csv(index=False).encode("utf-8"),
