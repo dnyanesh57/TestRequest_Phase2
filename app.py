@@ -95,6 +95,49 @@ div.stButton>button, .stDownloadButton>button {
 """, unsafe_allow_html=True)
 # Token landing page
 DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
+
+# ================== HARDENED PASSWORD RESET GATE (place VERY HIGH) ==================
+import urllib.parse
+
+# Try both query param APIs so it works across Streamlit versions
+try:
+    _QP = st.query_params  # modern
+except Exception:
+    _QP = st.experimental_get_query_params()  # legacy
+
+def _qp_get(name: str, default: str = "") -> str:
+    v = _QP.get(name, default)
+    if isinstance(v, list):
+        return v[0] if v else default
+    return v or default
+
+# Optional: set ?debug=1 to see incoming params on screen
+_DEBUG = _qp_get("debug")
+if _DEBUG:
+    st.info(f"Debug params: {dict(_QP)}")
+
+_view = _qp_get("view")
+if _view == "reset":
+    token = _qp_get("token")
+    # Show something on screen no matter what, so it can never be “blank”
+    st.markdown("## 🔐 Reset your password")
+    if not token:
+        st.error("Missing reset token in the URL.")
+        st.stop()
+
+    # import here so a missing function shows *on screen* instead of a blank page
+    try:
+        from db_adapter import verify_reset_token, complete_password_reset
+    except Exception as e:
+        st.error(f"Adapter import error: {e}")
+        st.stop()
+
+    # Pre-check the token and show any error visibly
+    try:
+        email_for_token = verify_reset_token(token)
+    except Exception as e:
+        email_for_token = None
+        st.error(f"Token verification exception: {e}")
 DEFAULT_GH_FOLDER = "data"                           # folder inside repo
 DEFAULT_GH_BRANCH = "master" 
 
@@ -130,56 +173,35 @@ def app_link(**params) -> str:
     return f"?{qp}" if qp else "?"
 
 
-# ------------------------ Password Reset Route (very early) ------------------------
-# Works on both old/new Streamlit param APIs
-try:
-    _params = st.query_params  # dict-like on recent versions
-except Exception:
-    _params = st.experimental_get_query_params()
+    if not email_for_token:
+        st.error("This reset link is invalid or has expired.")
+        st.stop()
 
-def _get_param(name: str, default: str = "") -> str:
-    v = _params.get(name, default)
-    if isinstance(v, list):  # experimental_get_query_params returns lists
-        return v[0] if v else default
-    return v or default
-
-def render_password_reset_view(token: str):
-    brand_header()  # fine if you keep your header styles
-    st.markdown("## Reset your password")
-    st.caption("Enter a new password below.")
-    p1 = st.text_input("New password", type="password", key="pw1")
-    p2 = st.text_input("Confirm new password", type="password", key="pw2")
-
+    # Render the simple form (avoid any custom headers or login blocks here)
+    p1 = st.text_input("New password", type="password")
+    p2 = st.text_input("Confirm new password", type="password")
     colA, colB = st.columns([1,1])
     with colA:
-        if st.button("Update password", type="primary", key="btn-update-pass"):
+        if st.button("Update password", type="primary"):
             if not p1 or not p2:
-                st.error("Please enter and confirm your new password.")
+                st.error("Please enter and confirm your password.")
             elif p1 != p2:
                 st.error("Passwords do not match.")
             else:
                 try:
-                    ok, msg, email = complete_password_reset(token, p1)
+                    ok, msg, em = complete_password_reset(token, p1)
                     if ok:
                         st.success("Password updated. You can now sign in from the login panel.")
                     else:
-                        st.error(msg or "Reset failed. The link may be invalid or expired.")
+                        st.error(msg or "Reset failed.")
                 except Exception as e:
-                    st.error(f"Unexpected error: {e}")
+                    st.error(f"Error completing reset: {e}")
     with colB:
-        st.link_button("Back to app", app_link(), type="secondary")
+        # Relative link back to app root; works even if base URL isn’t set
+        st.link_button("Back to app", "?", type="secondary")
 
-# Route gate: HANDLE RESET BEFORE LOGIN
-_view = _get_param("view")
-if _view == "reset":
-    _token = _get_param("token")
-    if not _token:
-        brand_header(); st.error("Missing reset token."); st.stop()
-    # Optional quick pre-check so invalid tokens show a friendly message
-    if not verify_reset_token(_token):
-        brand_header(); st.error("This reset link is invalid or has expired."); st.stop()
-    render_password_reset_view(_token)
     st.stop()
+# =====================================================================
 # Ensure vendor email & mail-log tables exist
 try:
     ensure_vendor_email_tables()
