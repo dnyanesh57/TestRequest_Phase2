@@ -893,6 +893,23 @@ def _clean_line_caption(caption: str) -> str:
     return re.sub(r'\s+', ' ', s).strip()
 
 # --- Single source of truth: read the row & produce cleaned full text ---
+# --- Put near your other helpers (best_col_fuzzy etc.) ---
+DESC_ALIASES = [
+ "OD_Description", "Description", "Item Description", "BOQ Item",
+ "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
+ "II_Title.1", "OI_Title"
+]
+
+def resolve_desc_col(df: pd.DataFrame) -> str | None:
+ hit = best_col_fuzzy(df, DESC_ALIASES)
+ if hit: return hit
+ for c in DESC_ALIASES:
+        b = best_col(df, c)
+        if b: return b
+ for c in df.columns.astype(str):
+        if "desc" in c.lower():
+            return c
+ return None
 def _clean_text_for_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> str:
     sel = items_df[
         (items_df["Project_Key"].astype(str)==str(proj)) &
@@ -2251,23 +2268,26 @@ def generate_pdf_and_log_lines(
     reused_map: Dict[str, str] = {}
 
     for entry in cart_entries:
-        # >>> NORMALIZE DESCRIPTION from selected line (if any)
+        # --- NORMALIZE DESCRIPTION at save time (bulletproof) ---
         line_key_str = str(entry.get("line_key","")).strip()
         if line_key_str and line_key_str.upper() != "NEW":
-            cleaned_desc = _clean_text_for_line(items_df,
-                                                entry.get("project_code",""),
-                                                entry.get("vendor",""),
-                                                entry.get("wo",""),
-                                                line_key_str)
-            if cleaned_desc:
-                # overwrite both fields so everything (registry, PDF, emails) is aligned
-                entry["description"] = cleaned_desc
-                entry["line_item"]   = cleaned_desc
+            sel = items_df[
+                (items_df["Project_Key"].astype(str)==str(entry.get("project_code",""))) &
+                (items_df["Subcontractor_Key"].astype(str)==str(entry.get("vendor",""))) &
+                (items_df["WO_Key"].astype(str)==str(entry.get("wo",""))) &
+                (items_df["Line_Key"].astype(str)==line_key_str)
+            ].head(1)
+            if not sel.empty:
+                dcol = resolve_desc_col(sel) or resolve_desc_col(items_df) or "OD_Description"
+                raw_desc = str(sel.iloc[0].get(dcol, "")).strip()
+                cleaned = _clean_line_caption(f"Line {line_key_str} — {raw_desc}")
+                entry["description"] = cleaned
+                entry["line_item"] = cleaned
         else:
-            # For NEW items, still clean whatever free text was typed
             entry["description"] = _clean_line_caption(str(entry.get("description","")))
-            entry["line_item"]   = entry["description"]
+            entry["line_item"] = entry["description"]
 
+        # Check if description is valid after normalization
         desc_ok = bool(str(entry.get("description","")).strip())
         qty = _coerce_float(entry.get("qty", 0))
         if not desc_ok or qty <= 0:
@@ -2818,6 +2838,16 @@ def upsert_cart_item(item: dict):
     st.session_state.req_cart.append(item)
     return "inserted"
 
+# ---- BEFORE widgets: init session state keys only once ----
+if "rr" not in st.session_state:
+ st.session_state.rr = {"touched": False}
+st.session_state.setdefault("rr-proj", "")
+st.session_state.setdefault("rr-vendor", "")
+st.session_state.setdefault("rr-wo", "")
+st.session_state.setdefault("rr-line", "")
+st.session_state.setdefault("rr-desc", "")
+st.session_state.setdefault("rr-uom", "")
+st.session_state.setdefault("rr-stage", "")
 
 
 # Sidebar — Upload + Display + Branding
@@ -2999,6 +3029,70 @@ if "*" not in user_sites:
     summary_f = wo_summary(items_f)
 
 # ---------------------- Tabs ----------------------
+
+def _clean_line_caption(s: str) -> str:
+    if not s: return ""
+    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', str(s), flags=re.IGNORECASE) # drop "Line xx — "
+    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE) # drop "(Rem: ...)" or "(Qty ...)"
+    return re.sub(r'\s+', ' ', s).strip()
+
+def _on_line_change():
+    lk = st.session_state.get("rr-line")
+    if not lk:
+        st.session_state["rr-desc"] = ""
+        st.session_state["rr-uom"] = ""
+        st.session_state["rr-stage"] = ""
+        st.session_state.rr["touched"] = False
+        return
+    sel = items_df[
+        (items_df["Project_Key"]==st.session_state["rr-proj"]) &
+        (items_df["Subcontractor_Key"]==st.session_state["rr-vendor"]) &
+        (items_df["WO_Key"]==st.session_state["rr-wo"]) &
+        (items_df["Line_Key"].astype(str)==str(lk))
+    ].head(1)
+    if sel.empty:
+        st.session_state["rr-desc"] = ""
+        st.session_state["rr-uom"] = ""
+        st.session_state["rr-stage"] = ""
+        st.session_state.rr["touched"] = False
+        return
+    dcol = resolve_desc_col(sel) or resolve_desc_col(items_df) or "OD_Description"
+    raw = str(sel.iloc[0].get(dcol, "")).strip()
+    st.session_state["rr-desc"] = _clean_line_caption(f"Line {lk} — {raw}")
+    st.session_state["rr-uom"] = str(sel.iloc[0].get("OD_UOM", sel.iloc[0].get(best_col(sel,"OD_UOM") or "UOM",""))).strip()
+    st.session_state["rr-stage"] = str(sel.iloc[0].get("OD_Stage",sel.iloc[0].get(best_col(sel,"OD_Stage") or "Stage",""))).strip()
+    st.session_state.rr["touched"] = False
+
+def _on_desc_touch():
+    st.session_state.rr["touched"] = True
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 LINE_COLS_BASE = [
     "Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage",
     "Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty",
