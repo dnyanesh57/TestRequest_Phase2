@@ -534,7 +534,14 @@ def _ensure_acl_in_state():
     df = pd.DataFrame()
 
     # 1) Try DB first
-    try:
+    try: # Ensure Master Admin can always see the Admin tab
+        if _user_is_master_admin() and "Admin" not in st.session_state.enabled_tabs:
+            st.session_state.enabled_tabs.append("Admin")
+        # Also ensure other admin-only tabs are visible
+        for t in ["Admin", "Email Drafts", "Export", "Requirements Registry"]:
+            if _user_is_master_admin() and t not in st.session_state.enabled_tabs:
+                st.session_state.enabled_tabs.append(t)
+
         from db_adapter import read_acl_df, write_acl_df  # already in your repo
         df = read_acl_df()
     except Exception:
@@ -738,7 +745,10 @@ def _ensure_reqlog_in_state():
         st.session_state.reqlog_df = ensure_registry_columns(df)
 
 def _load_enabled_tabs():
-    t = read_enabled_tabs()
+    t = read_enabled_tabs() # if nothing saved, return base
+    if not t:
+        return ["Overview","Group: WO → Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
+    # always inject Admin for master admins later; here just return saved list
     return t if t else ["Overview","Group: WO → Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
 
 def _save_enabled_tabs(lst):
@@ -757,10 +767,13 @@ def _login_block():
         if st.button("Sign in", type="primary", key="rbac-go"):
             row = st.session_state.acl_df[st.session_state.acl_df["email"]==email].head(1)
             if not row.empty and _sha256_hex(pwd)==row.iloc[0]["password_hash"]:
+                role_raw = str(row.iloc[0]["role"]).strip().lower()
+                role_norm = "master_admin" if role_raw in ("admin","master_admin") else role_raw
+
                 st.session_state.user = {
                     "email": email,
                     "name": row.iloc[0]["name"],
-                    "role": ("master_admin" if str(row.iloc[0]["role"]).lower()=="admin" else row.iloc[0]["role"]),
+                    "role": role_norm,
                     "sites": row.iloc[0]["sites"],
                     "tabs": row.iloc[0]["tabs"],
                 "can_raise": bool(row.iloc[0].get("can_raise", True)),
@@ -2212,6 +2225,29 @@ def generate_pdf_and_log_lines(
     reused_map: Dict[str, str] = {}
 
     for entry in cart_entries:
+        # >>> NORMALIZE DESCRIPTION from selected line (if any)
+        line_key_str = str(entry.get("line_key","")).strip()
+        if line_key_str and line_key_str.upper() != "NEW":
+            cleaned_desc = _clean_text_for_line(items_df,
+                                                entry.get("project_code",""),
+                                                entry.get("vendor",""),
+                                                entry.get("wo",""),
+                                                line_key_str)
+            if cleaned_desc:
+                # overwrite both fields so everything (registry, PDF, emails) is aligned
+                entry["description"] = cleaned_desc
+                entry["line_item"]   = cleaned_desc
+        else:
+            # For NEW items, still clean whatever free text was typed
+            entry["description"] = _clean_line_caption(str(entry.get("description","")))
+            entry["line_item"]   = entry["description"]
+
+        desc_ok = bool(str(entry.get("description","")).strip())
+        qty = _coerce_float(entry.get("qty", 0))
+        if not desc_ok or qty <= 0:
+            continue
+
+    for entry in cart_entries:
         desc_ok = bool(str(entry.get("description","")).strip())
         qty = _coerce_float(entry.get("qty", 0))
         if not desc_ok or qty <= 0:
@@ -2239,7 +2275,7 @@ def generate_pdf_and_log_lines(
             "project_code": entry["project_code"], "project_name": entry.get("project_name", entry["project_code"]),
             "request_type": entry["request_type"], "vendor": entry["vendor"], "wo": entry["wo"],
             "line_key": entry["line_key"], "uom": entry["uom"], "stage": entry["stage"],
-            "description": entry["description"].strip(), "qty": float(qty),
+            "description": entry["description"].strip(), "qty": float(qty), # ...and ensure the row you write keeps: "line_item": entry.get("line_item",""), "description": entry["description"].strip(),
             "date_casting": entry.get("date_casting",""), "date_testing": entry.get("date_testing",""),
             "remarks": entry.get("remarks",""),
             "remaining_at_request": entry.get("remaining_at_request",""),
