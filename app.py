@@ -881,35 +881,6 @@ def _clean_line_caption(caption: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
-# --- Cleaner: strip "Line xx — " and any trailing "(Rem: ...)" / "(Qty: ...)" ---
-import re
-
-def _clean_line_caption(caption: str) -> str:
-    if not caption:
-        return ""
-    s = str(caption)
-    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', s, flags=re.IGNORECASE)
-    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)
-    return re.sub(r'\s+', ' ', s).strip()
-
-# --- Single source of truth: read the row & produce cleaned full text ---
-# --- Put near your other helpers (best_col_fuzzy etc.) ---
-DESC_ALIASES = [
- "OD_Description", "Description", "Item Description", "BOQ Item",
- "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
- "II_Title.1", "OI_Title"
-]
-
-def resolve_desc_col(df: pd.DataFrame) -> str | None:
- hit = best_col_fuzzy(df, DESC_ALIASES)
- if hit: return hit
- for c in DESC_ALIASES:
-        b = best_col(df, c)
-        if b: return b
- for c in df.columns.astype(str):
-        if "desc" in c.lower():
-            return c
- return None
 def _clean_text_for_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> str:
     sel = items_df[
         (items_df["Project_Key"].astype(str)==str(proj)) &
@@ -925,6 +896,44 @@ def _clean_text_for_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str
     # (we purposely don't append (Rem: ...) here; cleaner handles it anyway)
     return _clean_line_caption(raw_caption)
 
+# --- Robust description resolver + cleaner ---
+DESC_ALIASES = [
+    "OD_Description", "Description", "Item Description", "BOQ Item",
+    "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
+    "II_Title.1", "OI_Title"
+]
+
+def resolve_desc_col(df: pd.DataFrame) -> str | None:
+    hit = best_col_fuzzy(df, DESC_ALIASES)
+    if hit: return hit
+    for c in DESC_ALIASES:
+        b = best_col(df, c)
+        if b: return b
+    for c in df.columns.astype(str):
+        if "desc" in c.lower(): return c
+    return None
+
+import re
+def _clean_line_caption(s: str) -> str:
+    if not s: return ""
+    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', str(s), flags=re.IGNORECASE)  # drop "Line xx — "
+    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)     # drop "(Rem: ...)"
+    return re.sub(r'\s+', ' ', s).strip()
+
+def get_selected_line_desc(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> str:
+    if not (proj and vendor and wo and line_key):
+        return ""
+    sel = items_df[
+        (items_df["Project_Key"].astype(str)==str(proj)) &
+        (items_df["Subcontractor_Key"].astype(str)==str(vendor)) &
+        (items_df["WO_Key"].astype(str)==str(wo)) &
+        (items_df["Line_Key"].astype(str)==str(line_key))
+    ].head(1)
+    if sel.empty:
+        return ""
+    dcol = resolve_desc_col(sel) or resolve_desc_col(items_df) or "OD_Description"
+    raw  = str(sel.iloc[0].get(dcol, "")).strip()
+    return _clean_line_caption(raw)
 
 # Renamed to _is_tab_enabled to avoid recursion with the `is_enabled` function in the global scope
 # >>> ADD: selection->form sync helper
@@ -956,7 +965,7 @@ def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, 
         except Exception:
             pass
 
-    cleaned = _clean_line_caption(raw_caption)  # <- strip "Line ..." and "(Rem: ...)"
+    cleaned = _clean_line_caption(raw_caption) # <- strip "Line ..." and "(Rem: ...)"
 
     return {
         "description": cleaned,                        # <<< now same as cleaned line text
@@ -2282,7 +2291,7 @@ def generate_pdf_and_log_lines(
                 raw_desc = str(sel.iloc[0].get(dcol, "")).strip()
                 cleaned = _clean_line_caption(f"Line {line_key_str} — {raw_desc}")
                 entry["description"] = cleaned
-                entry["line_item"] = cleaned
+                entry["line_item"] = cleaned # Keep line_item in sync with description
         else:
             entry["description"] = _clean_line_caption(str(entry.get("description","")))
             entry["line_item"] = entry["description"]
@@ -2293,7 +2302,7 @@ def generate_pdf_and_log_lines(
         if not desc_ok or qty <= 0:
             continue
 
-    for entry in cart_entries:
+    for entry in cart_entries: # Re-iterate after normalization
         desc_ok = bool(str(entry.get("description","")).strip())
         qty = _coerce_float(entry.get("qty", 0))
         if not desc_ok or qty <= 0:
@@ -2321,7 +2330,7 @@ def generate_pdf_and_log_lines(
             "project_code": entry["project_code"], "project_name": entry.get("project_name", entry["project_code"]),
             "request_type": entry["request_type"], "vendor": entry["vendor"], "wo": entry["wo"],
             "line_key": entry["line_key"], "uom": entry["uom"], "stage": entry["stage"],
-            "description": entry["description"].strip(), "qty": float(qty), # ...and ensure the row you write keeps: "line_item": entry.get("line_item",""), "description": entry["description"].strip(),
+            "description": entry["description"].strip(), "qty": float(qty),
             "date_casting": entry.get("date_casting",""), "date_testing": entry.get("date_testing",""),
             "remarks": entry.get("remarks",""),
             "remaining_at_request": entry.get("remaining_at_request",""),
