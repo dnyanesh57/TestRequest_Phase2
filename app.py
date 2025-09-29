@@ -3079,7 +3079,7 @@ for i, tab_label in enumerate(visible_tabs):
                             wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
                                                   "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
                             fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
-                               fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
+                            fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
                         else:
                             st.warning("Please select at least one vendor.")
 
