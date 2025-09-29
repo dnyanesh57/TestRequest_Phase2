@@ -203,28 +203,14 @@ def app_link(**params) -> str:
     st.stop()
 # =====================================================================
 # Ensure vendor email & mail-log tables exist
+# Ensure DB tables exist (single calls, don’t block UI if they fail)
 try:
     ensure_vendor_email_tables()
-except Exception as e:
-    st.error(f"DB init (vendor email tables) failed: {e}")
-
-# Ensure approval recipient tables exist
-try:
     ensure_approval_recipient_tables()
-except Exception as e:
-    st.error(f"DB init (approval recipients) failed: {e}")
-
-# Ensure reqlog email columns exist
-try:
     ensure_reqlog_email_columns()
+    
 except Exception as e:
-    st.warning(f"Could not verify emailed_* columns on requirements_log: {e}")
-
-# Ensure approver recipients table exists
-try:
- ensure_approval_recipient_tables()
-except Exception as e:
- st.error(f"DB init (approval recipients) failed: {e}")
+    st.warning(f"DB init (email/approval tables) failed: {e}")
 
 # SMTP + mail helpers (add once, top-level)
 from email.mime.text import MIMEText
@@ -430,14 +416,10 @@ def _load_csv_safe(path: str) -> pd.DataFrame:
         return pd.DataFrame()
 import re
 
-# Normalizes column names for fuzzy matching
 def _norm(s: str) -> str:
-    s = (s or "").strip()
-    s = s.lower()
-    s = s.replace("\u00a0", " ")  # NBSP -> space
-    s = re.sub(r"\s+", " ", s)   # collapse spaces
-    s = re.sub(r"[^a-z0-9]+", "", s)  # strip punctuation
-    return s
+    """Normalize a string for fuzzy column matching: lowercase, strip, remove spaces and punctuation."""
+    import re
+    return re.sub(r'[\s\W_]+', '', str(s).lower().strip())
 
 def best_col_fuzzy(df: pd.DataFrame, targets: list[str]) -> Optional[str]:
     """
@@ -784,6 +766,15 @@ def _login_block():
                 st.success(f"Signed in as {row.iloc[0]['name']} ({row.iloc[0]['role']})")
                 st.rerun()
             else:
+                # Ensure admin tabs are visible for master admin
+                if role_norm in ("master_admin", "admin"):
+                    must_have = ["Admin", "Email Drafts", "Export", "Requirements Registry"]
+                    if "enabled_tabs" not in st.session_state:
+                        st.session_state.enabled_tabs = _load_enabled_tabs()
+                    for t in must_have:
+                        if t not in st.session_state.enabled_tabs:
+                            st.session_state.enabled_tabs.append(t)
+                    _save_enabled_tabs(st.session_state.enabled_tabs)
                 st.error("Invalid credentials")
         st.markdown("---")
         st.markdown("**Forgot your password?**")
@@ -895,14 +886,24 @@ def _clean_text_for_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str
     raw_caption = f"Line {str(line_key).strip()} — {desc}"
     # (we purposely don't append (Rem: ...) here; cleaner handles it anyway)
     return _clean_line_caption(raw_caption)
-
-# --- Robust description resolver + cleaner ---
 DESC_ALIASES = [
     "OD_Description", "Description", "Item Description", "BOQ Item",
     "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
     "II_Title.1", "OI_Title"
 ]
 
+def resolve_desc_col(df: pd.DataFrame) -> Optional[str]:
+    # try fuzzy first (you already have best_col_fuzzy)
+    hit = best_col_fuzzy(df, DESC_ALIASES)
+    if hit: return hit
+    # fallback to your prefix-based best_col helper
+    for c in DESC_ALIASES:
+        b = best_col(df, c)
+        if b: return b
+    # last resort: any column with "desc" in its name
+    for c in df.columns.astype(str):
+        if "desc" in c.lower(): return c
+    return None
 def resolve_desc_col(df: pd.DataFrame) -> str | None:
     hit = best_col_fuzzy(df, DESC_ALIASES)
     if hit: return hit
@@ -912,13 +913,6 @@ def resolve_desc_col(df: pd.DataFrame) -> str | None:
     for c in df.columns.astype(str):
         if "desc" in c.lower(): return c
     return None
-
-import re
-def _clean_line_caption(s: str) -> str:
-    if not s: return ""
-    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', str(s), flags=re.IGNORECASE)  # drop "Line xx — "
-    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)     # drop "(Rem: ...)"
-    return re.sub(r'\s+', ' ', s).strip()
 
 def get_selected_line_desc(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> str:
     if not (proj and vendor and wo and line_key):
@@ -975,6 +969,10 @@ def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, 
         "line_item":  cleaned                          # <<< keep in sync with description
     }
 def _is_tab_enabled(tab_label: str) -> bool:
+    # Safety net so Admin never disappears for master admins
+    if _user_is_master_admin():
+        for t in ["Admin", "Email Drafts", "Export", "Requirements Registry"]:
+            if t not in st.session_state.enabled_tabs: st.session_state.enabled_tabs.append(t)
     return tab_label in st.session_state.enabled_tabs
 
 def can_view(tab_label: str) -> bool:
@@ -1086,14 +1084,28 @@ PREFIX_MAPPING: Dict[str, List[str]] = {
 REVERSE_MAP = {orig: f"{pref}{orig}" for pref, group in PREFIX_MAPPING.items() for orig in group}
 
 def rename_with_prefix(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    # 1) Stabilize headers (strip + dedupe)
+    df = df.copy() # 1) Stabilize headers (strip + dedupe)
     raw_cols = [str(c).strip() for c in df.columns]
     raw_cols = dedupe_columns(raw_cols)
-
     # 2) Apply mapping where we have it; keep others as-is
     new_cols = [REVERSE_MAP.get(c, c) for c in raw_cols]
     df.columns = new_cols
+
+    # GUARANTEE these exist (backfills)
+    if "OD_Description" not in df.columns:
+        for alt in ["Description", "Item Description", "BOQ Item"]:
+            if alt in df.columns:
+                df["OD_Description"] = df[alt]
+                break
+        else:
+            df["OD_Description"] = ""
+
+    if "OD_UOM" not in df.columns and "UOM" in df.columns:
+        df["OD_UOM"] = df["UOM"]
+    if "OD_Stage" not in df.columns and "Stage" in df.columns:
+        df["OD_Stage"] = df["Stage"]
+
+    return df
 
     # 3) Ensure key downstream columns exist (aliases/backfills)
     # Guarantee OD_Description exists (many exports name it just "Description")
@@ -1302,12 +1314,7 @@ def _shrink(df: pd.DataFrame) -> pd.DataFrame:
     for c in cat_cols:
         if c in df.columns:
             df[c] = df[c].astype("category")
-    return df
-
-
-
-
-
+            return df
 @st.cache_data
 def compute_items(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty: return df
@@ -1720,9 +1727,7 @@ def _shrink(df: pd.DataFrame) -> pd.DataFrame:
     for c in cat_cols:
         if c in df.columns:
             df[c] = df[c].astype("category")
-    return df
-
-
+            return df
 
 
 
@@ -1833,6 +1838,12 @@ def _styles():
     styles.add(ParagraphStyle(name="Cell", fontName="Helvetica", fontSize=8, leading=10, wordWrap="CJK"))
     styles.add(ParagraphStyle(name="CellBold", parent=styles["Cell"], fontName="Helvetica-Bold"))
         # === Emphasis styles for Reference & Integrity ===
+    # --- Robust description resolver + cleaner ---
+    DESC_ALIASES = [
+        "OD_Description", "Description", "Item Description", "BOQ Item",
+        "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
+        "II_Title.1", "OI_Title"
+    ]
     styles.add(ParagraphStyle(
         name="MetaLabel",
         parent=styles["Small"],
@@ -1860,6 +1871,12 @@ def _styles():
         leading=14,
         spaceAfter=0,
     ))
+    import re
+    def _clean_line_caption(s: str) -> str:
+        if not s: return ""
+        s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', str(s), flags=re.IGNORECASE)  # drop "Line xx — "
+        s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)     # drop "(Rem: ...)"
+        return re.sub(r'\s+', ' ', s).strip()
 
     return styles
 
@@ -2857,7 +2874,7 @@ st.session_state.setdefault("rr-line", "")
 st.session_state.setdefault("rr-desc", "")
 st.session_state.setdefault("rr-uom", "")
 st.session_state.setdefault("rr-stage", "")
-
+    
 
 # Sidebar — Upload + Display + Branding
 with st.sidebar:
@@ -3038,13 +3055,6 @@ if "*" not in user_sites:
     summary_f = wo_summary(items_f)
 
 # ---------------------- Tabs ----------------------
-
-def _clean_line_caption(s: str) -> str:
-    if not s: return ""
-    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', str(s), flags=re.IGNORECASE) # drop "Line xx — "
-    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE) # drop "(Rem: ...)" or "(Qty ...)"
-    return re.sub(r'\s+', ' ', s).strip()
-
 def _on_line_change():
     lk = st.session_state.get("rr-line")
     if not lk:
