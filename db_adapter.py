@@ -54,6 +54,44 @@ def _conn():
     with _engine.begin() as c:
         yield c
 
+# --- NaT/NULL sanitizers ---
+def _none_if_nat(v):
+    """Return None for pandas.NaT/NaN/empty-string; otherwise pass the value through."""
+    try:
+        import pandas as pd
+        import numpy as np
+        if v is None:
+            return None
+        # Treat pandas NaT/NaN
+        try:
+            if pd.isna(v):
+                return None
+        except Exception:
+            pass
+        # Treat string "NaT" or blanks as NULL
+        if isinstance(v, str) and v.strip().upper() in ("NAT", ""):
+            return None
+        return v
+    except Exception:
+        # Fallback: only treat literal string 'NaT' and blanks as null
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().upper() in ("NAT", ""):
+            return None
+        return v
+
+# Normalize a row dict before insert/update
+_TS_FIELDS = {
+    "generated_at","approved_at","auto_approved_at",
+    "emailed_vendor_at","vendor_emailed_at",
+    "emailed_requester_at","requester_emailed_at",
+}
+def _sanitize_row_timestamps(row: dict) -> dict:
+    for k in list(row.keys()):
+        if k in _TS_FIELDS:
+            row[k] = _none_if_nat(row.get(k))
+    return row
+
 # -------------------- Utilities --------------------
 def _sha256_hex(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()
@@ -413,6 +451,8 @@ def write_app_settings(use_github: bool, repo: str, branch: str, folder: str) ->
 def upsert_requirements(rows: list[dict]) -> None:
     _ensure_requirements_log_table() # Ensure table exists before upserting
     if not rows: return
+    # sanitize first (prevents 'NaT' into timestamptz)
+    rows = [_sanitize_row_timestamps(dict(r)) for r in rows]
     cols = rows[0].keys()
     keys = ",".join(cols)
     placeholders = ",".join([f":{c}" for c in cols])

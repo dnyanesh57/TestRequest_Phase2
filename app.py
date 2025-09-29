@@ -306,6 +306,16 @@ def build_vendor_email_subject(row: dict) -> str:
     req_type = row.get("request_type", "")
     # Example subject used widely; adjust if your auto-approval uses a different text:
     return f"[SJCPL] {req_type} — {proj} — {ref}"
+
+def build_autoapproved_vendor_subject_and_body(row: dict, requester_name: str) -> Tuple[str, str]:
+    """
+    Builds the subject and HTML body for an auto-approved vendor email.
+    This is a helper function to keep the email logic consistent.
+    """
+    proj = row.get("project_name") or row.get("project_code") or ""
+    ref = row.get("ref","")
+    req_type = row.get("request_type", "")
+    return f"[SJCPL] {req_type} — {proj} — {ref}"
 def send_email_via_smtp(to_email: str, subject: str, html_body: str,
                         attachment_bytes: bytes | None, attachment_name: str | None) -> tuple[bool, str]:
     """
@@ -2334,6 +2344,7 @@ def send_vendor_emails_same_as_auto(refs: list[str]):
     user = st.session_state.get("user", {})
     requester_name  = user.get("name", "User")
     requester_email = user.get("email", "user@sjcpl.local")
+    
     company_meta    = st.session_state.get("company_meta", {})
 
     emailed_refs: list[str] = []
@@ -2355,8 +2366,7 @@ def send_vendor_emails_same_as_auto(refs: list[str]):
             continue
 
         # === SAME subject/body as auto-approval ===
-        subject   = build_vendor_email_subject(r) # <<< identical subject
-        html_body = build_vendor_email_html(r) # <<< identical body
+        subject, html_body = build_autoapproved_vendor_subject_and_body(r, requester_name)
 
         # === SAME single-ref PDF as auto-approval ===
         pdf_bytes = build_requirement_pdf_from_rows([r], company_meta)
