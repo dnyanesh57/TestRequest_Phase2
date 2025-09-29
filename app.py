@@ -513,12 +513,12 @@ def _ensure_acl_in_state():
     if "acl_df" in st.session_state:
         return
 
-    df = pd.DataFrame()
+    df = pd.DataFrame() # Initialize df as an empty DataFrame
 
     # 1) Try DB first
     try: # Ensure Master Admin can always see the Admin tab
         if _user_is_master_admin() and "Admin" not in st.session_state.enabled_tabs:
-            st.session_state.enabled_tabs.append("Admin")
+            st.session_state.enabled_tabs.append("Admin") # This line might cause an error if enabled_tabs is not initialized
         # Also ensure other admin-only tabs are visible
         for t in ["Admin", "Email Drafts", "Export", "Requirements Registry"]:
             if _user_is_master_admin() and t not in st.session_state.enabled_tabs:
@@ -768,12 +768,14 @@ def _login_block():
             else:
                 # Ensure admin tabs are visible for master admin
                 if role_norm in ("master_admin", "admin"):
-                    must_have = ["Admin", "Email Drafts", "Export", "Requirements Registry"]
                     if "enabled_tabs" not in st.session_state:
                         st.session_state.enabled_tabs = _load_enabled_tabs()
+                    must_have = ["Admin", "Email Drafts", "Export", "Requirements Registry"]
                     for t in must_have:
                         if t not in st.session_state.enabled_tabs:
                             st.session_state.enabled_tabs.append(t)
+                    # Remove duplicates and save
+                    st.session_state.enabled_tabs = list(dict.fromkeys(st.session_state.enabled_tabs))
                     _save_enabled_tabs(st.session_state.enabled_tabs)
                 st.error("Invalid credentials")
         st.markdown("---")
@@ -971,7 +973,8 @@ def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, 
 def _is_tab_enabled(tab_label: str) -> bool:
     # Safety net so Admin never disappears for master admins
     if _user_is_master_admin():
-        for t in ["Admin", "Email Drafts", "Export", "Requirements Registry"]:
+        # Ensure all admin-specific tabs are enabled for master admins
+        for t in ["Admin", "Email Drafts", "Export", "Requirements Registry", "Approval List"]:
             if t not in st.session_state.enabled_tabs: st.session_state.enabled_tabs.append(t)
     return tab_label in st.session_state.enabled_tabs
 
@@ -1108,7 +1111,7 @@ def rename_with_prefix(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
     # 3) Ensure key downstream columns exist (aliases/backfills)
-    # Guarantee OD_Description exists (many exports name it just "Description")
+    # Guarantee OD_Description exists (many exports name it just "Description") # This block is duplicated
     if "OD_Description" not in df.columns:
         # try common alternates that may have slipped through
         for alt in ["Description", "Item Description", "BOQ Item"]:
@@ -1128,10 +1131,8 @@ def rename_with_prefix(df: pd.DataFrame) -> pd.DataFrame:
     return df
 def find_qty_source(df: pd.DataFrame, canonical: str) -> str:
     """
-    Given a canonical key like 'OD_Qty.' returns the actual column name
-    found in df using fuzzy matching over known aliases.
-    If nothing is found, returns the canonical string (which upstream code
-    guards by creating the column if missing).
+    Given a canonical key like 'OD_Qty.' returns the actual column name found in df using fuzzy matching over known aliases.
+    If nothing is found, returns the canonical string (which upstream code guards by creating the column if missing).
     """
     aliases = _QUANTITY_ALIASES.get(canonical, [canonical])
     hit = best_col_fuzzy(df, aliases)
@@ -1288,7 +1289,7 @@ def _df_signature(df: pd.DataFrame) -> str:
     return h.hexdigest()
 def load_table(upload) -> pd.DataFrame:
     if upload is None: return pd.DataFrame()
-    name = upload.name.lower()
+    name = upload.name.lower() # This function is duplicated
     try:
         if name.endswith(".csv"):
             df = pd.read_csv(upload, encoding="latin1", engine="python", skiprows=2)
@@ -1304,7 +1305,7 @@ def load_table(upload) -> pd.DataFrame:
 # ---------------------- Transform (robust) ----------------------
 # 6) Vectorize types early (smaller & faster)
 # Cut memory + speed up groupbys.
-def _shrink(df: pd.DataFrame) -> pd.DataFrame:
+def _shrink(df: pd.DataFrame) -> pd.DataFrame: # This function is duplicated
     df = df.copy()
     num_cols = ["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]
     for c in num_cols:
@@ -1314,11 +1315,10 @@ def _shrink(df: pd.DataFrame) -> pd.DataFrame:
     for c in cat_cols:
         if c in df.columns:
             df[c] = df[c].astype("category")
-            return df
+    return df
 @st.cache_data
 def compute_items(df: pd.DataFrame) -> pd.DataFrame:
-    if df.empty: return df
-    df = rename_with_prefix(df)
+    if df.empty: return df # This function is duplicated
 
     col_ref  = best_col(df, "OI_Ref. #") or "OI_Ref. #"
     col_proj = best_col(df, "OI_Project") or "OI_Project"
@@ -1329,7 +1329,7 @@ def compute_items(df: pd.DataFrame) -> pd.DataFrame:
 
     for need in [col_ref, col_proj, col_subc, col_lt, col_ln, col_date]:
         if need not in df.columns: df[need] = np.nan
-
+    df = rename_with_prefix(df)
     lt_series = df[col_lt].astype(str).str.strip().str.lower()
     items = df.copy()  # default (some exports omit clear 'Item' tagging)
     mask_item = (
@@ -1390,7 +1390,7 @@ def compute_items(df: pd.DataFrame) -> pd.DataFrame:
 
 @st.cache_data
 def wo_summary(items: pd.DataFrame) -> pd.DataFrame:
-    if items.empty: return items
+    if items.empty: return items # This function is duplicated
     return items.groupby(["WO_Key","Project_Key","Subcontractor_Key"], dropna=False).agg(
         Lines=("Line_Key","nunique"),
         Initial_Qty=("Initial_Qty","sum"),
@@ -1404,7 +1404,7 @@ def wo_summary(items: pd.DataFrame) -> pd.DataFrame:
 # Precompute once per filter and reuse.
 @st.cache_data(show_spinner=False, max_entries=10)
 def pre_aggregations(df: pd.DataFrame):
-    if df.empty:
+    if df.empty: # This function is duplicated
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     wo = wo_summary(df)
     proj = wo.groupby("Project_Key", dropna=False)[["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
@@ -1414,7 +1414,7 @@ def pre_aggregations(df: pd.DataFrame):
 # ---------------------- PDF helpers ----------------------
 @st.cache_resource
 def _styles():
-    styles = getSampleStyleSheet()
+    styles = getSampleStyleSheet() # This function is duplicated
     styles.add(ParagraphStyle(name="BrandTitle", fontName="Helvetica-Bold", fontSize=14, textColor=colors.HexColor(BRAND_BLACK), spaceAfter=6))
     styles.add(ParagraphStyle(name="BrandH2", fontName="Helvetica-Bold", fontSize=12, textColor=colors.HexColor(BRAND_BLUE), spaceAfter=4))
     styles.add(ParagraphStyle(name="Small", fontName="Helvetica", fontSize=8, textColor=colors.black, leading=10))
@@ -1838,12 +1838,6 @@ def _styles():
     styles.add(ParagraphStyle(name="Cell", fontName="Helvetica", fontSize=8, leading=10, wordWrap="CJK"))
     styles.add(ParagraphStyle(name="CellBold", parent=styles["Cell"], fontName="Helvetica-Bold"))
         # === Emphasis styles for Reference & Integrity ===
-    # --- Robust description resolver + cleaner ---
-    DESC_ALIASES = [
-        "OD_Description", "Description", "Item Description", "BOQ Item",
-        "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
-        "II_Title.1", "OI_Title"
-    ]
     styles.add(ParagraphStyle(
         name="MetaLabel",
         parent=styles["Small"],
@@ -1871,13 +1865,13 @@ def _styles():
         leading=14,
         spaceAfter=0,
     ))
-    import re
-    def _clean_line_caption(s: str) -> str:
-        if not s: return ""
-        s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', str(s), flags=re.IGNORECASE)  # drop "Line xx — "
-        s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)     # drop "(Rem: ...)"
-        return re.sub(r'\s+', ' ', s).strip()
-
+    # --- Robust description resolver + cleaner ---
+    DESC_ALIASES = [
+        "OD_Description", "Description", "Item Description", "BOQ Item",
+        "OD_BOQ Item", "Work Item Description", "Scope", "Item", "Narration",
+        "II_Title.1", "OI_Title"
+    ]
+    
     return styles
 
 def _table_style():
@@ -1906,7 +1900,7 @@ REQUIRED_REG_COLS = [
     "status","approver","approved_at",
     # Engine extras
     "idem_key","status_detail","auto_approved_at","auto_approved_by",
-    "engine_version","snap_company_name","snap_address_1","snap_address_2", "line_item"
+    "engine_version","snap_company_name","snap_address_1","snap_address_2", "line_item" # Added line_item
 ]
 
 def ensure_registry_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -2007,7 +2001,7 @@ def email_vendors_if_autoapproved(
         return
 
     # Imports here so any adapter errors show to the user
-    from db_adapter import (
+    from db_adapter import ( # This block is duplicated
         read_requirements_by_refs,
         get_vendor_email,
         log_requirement_email,
@@ -2236,7 +2230,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         qty_val = _coerce_float(p.get("qty", ""))
         qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "—"
  # e.g., "Line 8.0 — Charges for AAC Block Test - Compressive Strength Test"
- # and on next line your edited Description (if different).
+ # and on next line your edited Description (if different). # This line is duplicated
         line_item = p.get("line_item", "")
         if line_item and line_item.lower() != desc.lower():
             item_desc_text = f"<b>{line_item}</b><br/>{desc} <br/> (Stage: {stage})"
@@ -2294,7 +2288,7 @@ def generate_pdf_and_log_lines(
     reused_map: Dict[str, str] = {}
 
     for entry in cart_entries:
-        # --- NORMALIZE DESCRIPTION at save time (bulletproof) ---
+        # --- NORMALIZE DESCRIPTION at save time (bulletproof) --- # This block is duplicated
         line_key_str = str(entry.get("line_key","")).strip()
         if line_key_str and line_key_str.upper() != "NEW":
             sel = items_df[
@@ -2319,7 +2313,7 @@ def generate_pdf_and_log_lines(
         if not desc_ok or qty <= 0:
             continue
 
-    for entry in cart_entries: # Re-iterate after normalization
+    for entry in cart_entries: # Re-iterate after normalization # This block is duplicated
         desc_ok = bool(str(entry.get("description","")).strip())
         qty = _coerce_float(entry.get("qty", 0))
         if not desc_ok or qty <= 0:
@@ -2436,7 +2430,7 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
         st.caption("Registry is empty.")
         return
 
-    df_filtered = reqlog_df  # (no boolean checks on a DataFrame)
+    df_filtered = reqlog_df # (no boolean checks on a DataFrame) # This line is duplicated
 
     refs = st.multiselect(
         "Select Reference(s) to reprint",
@@ -2457,7 +2451,7 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
         )
 
 def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company_meta: Dict):
-    st.subheader("My Requests & Logs")
+    st.subheader("My Requests & Logs") # This function is duplicated
 
     df = ensure_registry_columns(reqlog_df).copy()
     mine = df[df["generated_by_email"] == user_email].copy()
@@ -2465,7 +2459,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
     if mine.empty:
         st.info("You haven't generated any requests yet.")
         return
-
+    
         # ---------- Quick summary tiles ---------- # Removed vendor email checkbox from here
         st.session_state["selected_refs_for_vendor_send"] = []
     total = len(mine)
@@ -2601,7 +2595,7 @@ def send_vendor_emails_same_as_auto(refs: list[str]):
         return
 
     try:
-        from db_adapter import read_requirements_by_refs, get_vendor_email, log_requirement_email, mark_vendor_emailed
+        from db_adapter import read_requirements_by_refs, get_vendor_email, log_requirement_email, mark_vendor_emailed # This block is duplicated
     except Exception as e:
         st.error(f"DB adapter not ready: {e}")
         return
@@ -2661,7 +2655,7 @@ def _send_vendor_emails_for_refs(refs: list[str]):
         return
 
     # Load rows and ensure all are sendable
-    try:
+    try: # This block is duplicated
         rows = read_requirements_by_refs(refs)
     except Exception as e:
         st.error(f"Could not load selected refs: {e}")
@@ -2673,7 +2667,7 @@ def _send_vendor_emails_for_refs(refs: list[str]):
         return
 
     # Build one combined PDF for the selected refs
-    try:
+    try: # This block is duplicated
         pdf_bytes = build_requirement_pdf_from_rows(rows, st.session_state.company_meta)
     except Exception as e:
         st.error(f"PDF build failed: {e}")
@@ -2681,7 +2675,7 @@ def _send_vendor_emails_for_refs(refs: list[str]):
 
     # Send one email per vendor (group)
     from collections import defaultdict
-    by_vendor = defaultdict(list)
+    by_vendor = defaultdict(list) # This block is duplicated
     for r in rows:
         by_vendor[str(r.get("vendor",""))].append(r)
 
@@ -2803,7 +2797,7 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
     return html
 
 def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_meta: Dict):
-    # Ensure 'generated_at' is a datetime object for sorting
+    # Ensure 'generated_at' is a datetime object for sorting # This function is duplicated
     if 'generated_at' in df_filtered.columns:
         df_filtered['generated_at'] = pd.to_datetime(df_filtered['generated_at'], errors='coerce')
 
@@ -2823,7 +2817,7 @@ def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_m
         st.download_button("Download PDF (this ref)", data=pdf_bytes, file_name=f"{sel_ref.replace('/','_')}.pdf", mime="application/pdf", key="reg-view-print-dl")
 
 def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.DataFrame, company_meta: Dict, save_cb):
-    st.markdown("### Admin Tools")
+    st.markdown("### Admin Tools") # This function is duplicated
     c1, c2 = st.columns([1,1])
     with c1:
         if st.button("🔁 Run Post-CSV Auto-Approval sweep"):
@@ -2831,7 +2825,7 @@ def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.Data
             save_cb(upd)
             st.success(f"Auto-approved {n} record(s) where stock is now available.")
     with c2:
-        render_reprint_section(st, reqlog_df, company_meta, key_prefix="admin-reprint")
+        render_reprint_section(st, reqlog_df, company_meta, key_prefix="admin-reprint") # This line is duplicated
 
 # ===== UI =====
 brand_header()
@@ -2846,7 +2840,7 @@ if "app_settings" not in st.session_state:
     st.session_state.app_settings = read_app_settings()
 _ensure_reqlog_in_state()
 _login_block()
-
+# This block is duplicated
 # --- cart bootstrap & helpers (added) ---
 if "req_cart" not in st.session_state:
     st.session_state.req_cart = []  # list of dicts (one row per requested line)
@@ -2874,7 +2868,7 @@ st.session_state.setdefault("rr-line", "")
 st.session_state.setdefault("rr-desc", "")
 st.session_state.setdefault("rr-uom", "")
 st.session_state.setdefault("rr-stage", "")
-    
+
 
 # Sidebar — Upload + Display + Branding
 with st.sidebar:
@@ -2882,7 +2876,7 @@ with st.sidebar:
 
     S = st.session_state.app_settings  # shorthand
 
-    # Only master admin can switch away from GitHub
+    # Only master admin can switch away from GitHub # This block is duplicated
     if _user_is_master_admin():
         source = st.radio("Choose data source", ["GitHub (default)", "Manual upload"], index=(0 if S["data_source"]=="github" else 1))
         S["data_source"] = "github" if "GitHub" in source else "upload"
@@ -2905,7 +2899,7 @@ with st.sidebar:
     # --- Load the data according to chosen source ---
     gh_status = ""
     upl = None
-
+    # This block is duplicated
     if S["data_source"] == "github":
         items_note = ""
         # Use the helper you already have: try_load_latest_from_github(repo, folder, branch)
@@ -2930,7 +2924,7 @@ with st.sidebar:
     low_metric = st.selectbox("Low-qty metric", ["Remaining_Qty","Revised_Qty","Initial_Qty"], index=0, key="low-metric")
     low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr")
 
-if _user_is_master_admin():
+if _user_is_master_admin(): # This block is duplicated
     with st.sidebar.expander("🏷️ Company & Branding (Admin)"):
         name = st.text_input("Company Name", st.session_state.company_meta["name"])
         addr1 = st.text_input("Address line 1", st.session_state.company_meta["address_lines"][0])
@@ -2967,7 +2961,7 @@ if _user_is_master_admin():
                 st.error(str(e))
         st.caption(f"Repo: {S.get('github_repo')} | Branch: {S.get('github_branch')} | Folder: {S.get('github_folder')}")
         st.caption("If the repo is private or you hit rate-limits, add [github].token to secrets.")
-        
+
 
 with st.sidebar.expander("🔑 Change Password", expanded=False):
     if "user" in st.session_state:
@@ -2993,7 +2987,7 @@ with st.sidebar.expander("🔑 Change Password", expanded=False):
         st.caption("Sign in to change your password.")
 
 
-if S["data_source"] == "github":
+if S["data_source"] == "github": # This block is duplicated
     c1, c2 = st.columns([1,1])
     with c1:
         reload_gh = st.button("🔄 Reload from GitHub", key="gh-reload")
@@ -3007,7 +3001,7 @@ if S["data_source"] == "github":
     raw_df = st.session_state._raw_df_cache
 else:
     raw_df = load_table(upl) if upl else pd.DataFrame()
-if raw_df.empty:
+if raw_df.empty: # This block is duplicated
     st.info("Upload a file to begin. Headers expected on row 3 (skip first 2 rows)."); st.stop()
 
 items_df = compute_items(raw_df)
@@ -3028,7 +3022,7 @@ if _user_is_master_admin() or _user_is_site_admin():
     with c1: f_projects = st.multiselect("Project(s)", projects, default=projects, key="f_proj")
     with c2: f_subs     = st.multiselect("Vendor(s) — Global", subs, default=subs, key="f_sub")
     with c3: f_wos      = st.multiselect("Work Order(s)", wos, default=[], key="f_wo")
-else:
+else: # This block is duplicated
     user_sites = _user_allowed_sites()
     if "*" in user_sites:
         f_projects = projects
@@ -3048,7 +3042,7 @@ mask = (
 items_f = items_df[mask].copy()
 items_f = _shrink(items_f)
 summary_f, proj_agg, sub_agg = pre_aggregations(items_f)
-
+# This block is duplicated
 user_sites = _user_allowed_sites()
 if "*" not in user_sites:
     items_f = items_f[items_f["Project_Key"].isin(user_sites)].copy()
@@ -3062,7 +3056,7 @@ def _on_line_change():
         st.session_state["rr-uom"] = ""
         st.session_state["rr-stage"] = ""
         st.session_state.rr["touched"] = False
-        return
+        return # This block is duplicated
     sel = items_df[
         (items_df["Project_Key"]==st.session_state["rr-proj"]) &
         (items_df["Subcontractor_Key"]==st.session_state["rr-vendor"]) &
@@ -3084,33 +3078,7 @@ def _on_line_change():
 
 def _on_desc_touch():
     st.session_state.rr["touched"] = True
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    
 
 LINE_COLS_BASE = [
     "Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage",
