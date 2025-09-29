@@ -868,6 +868,34 @@ def _clean_line_caption(caption: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
+# --- Cleaner: strip "Line xx — " and any trailing "(Rem: ...)" / "(Qty: ...)" ---
+import re
+
+def _clean_line_caption(caption: str) -> str:
+    if not caption:
+        return ""
+    s = str(caption)
+    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', s, flags=re.IGNORECASE)
+    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', s).strip()
+
+# --- Single source of truth: read the row & produce cleaned full text ---
+def _clean_text_for_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> str:
+    sel = items_df[
+        (items_df["Project_Key"].astype(str)==str(proj)) &
+        (items_df["Subcontractor_Key"].astype(str)==str(vendor)) &
+        (items_df["WO_Key"].astype(str)==str(wo)) &
+        (items_df["Line_Key"].astype(str)==str(line_key))
+    ].head(1)
+    if sel.empty:
+        return ""
+    desc = str(sel.iloc[0].get("OD_Description","")).strip()
+    # we build what the picker shows, then clean it (so the logic works no matter how you format it)
+    raw_caption = f"Line {str(line_key).strip()} — {desc}"
+    # (we purposely don't append (Rem: ...) here; cleaner handles it anyway)
+    return _clean_line_caption(raw_caption)
+
+
 # Renamed to _is_tab_enabled to avoid recursion with the `is_enabled` function in the global scope
 # >>> ADD: selection->form sync helper
 def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> dict:
@@ -4025,6 +4053,71 @@ for i, tab_label in enumerate(visible_tabs):
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
+        elif tab_label == "Raise Requirement":
+            cleaned_for_save = _clean_text_for_line(items_df, proj_pick, vend_pick, wo_pick, line_pick) if line_pick else (st.session_state.get("rr-desc","") or "")
+            desc_final = cleaned_for_save.strip()
+            if st.button("↻ Use selected line text", key="rr-sync-desc"):
+                cleaned = _clean_text_for_line(items_df, proj_pick, vend_pick, wo_pick, line_pick) if line_pick else ""
+                st.session_state["rr-desc"] = cleaned
+                st.session_state["rr-line_item"] = cleaned
+                st.session_state.rr_state["touched"] = False
+                st.rerun()
+        elif tab_label == "Raise Requirement":
+            cleaned_for_save = _clean_text_for_line(items_df, proj_pick, vend_pick, wo_pick, line_pick) if line_pick else (st.session_state.get("rr-desc","") or "")
+            desc_final = cleaned_for_save.strip()
+            line_item_final = cleaned_for_save.strip() # keep in sync
+
+            if can_view("Raise Requirement"):
+                st.subheader("Raise New Requirement")
+                st.caption("Fill out the details below to raise a new requirement.")
+
+                # --- Project/Vendor/WO/Line selectors ---
+                proj_pick = st.selectbox("Project", projects, key="rr-proj")
+                subs_for_proj = sorted(items_df[items_df["Project_Key"] == proj_pick]["Subcontractor_Key"].dropna().unique())
+                vend_pick = st.selectbox("Vendor", subs_for_proj, key="rr-vendor")
+                wos_for_vend = sorted(items_df[(items_df["Project_Key"] == proj_pick) & (items_df["Subcontractor_Key"] == vend_pick)]["WO_Key"].dropna().unique())
+                wo_pick = st.selectbox("Work Order", wos_for_vend, key="rr-wo")
+
+                line_keys_for_wo = sorted(
+                    items_df.loc[
+                        (items_df["Project_Key"] == proj_pick) &
+                        (items_df["Subcontractor_Key"] == vend_pick) &
+                        (items_df["WO_Key"] == wo_pick),
+                        "Line_Key"
+                    ].astype(str).unique()
+                )
+                line_pick = st.selectbox("Select Line", ["NEW"] + line_keys_for_wo, key="rr-line")
+
+                # --- init state buckets once ---
+                if "rr_state" not in st.session_state:
+                    st.session_state.rr_state = {"touched": False, "last_key": ""}
+
+                # Compute a selection fingerprint
+                sel_key = f"{proj_pick}|{vend_pick}|{wo_pick}|{line_pick}"
+
+                # If selection changed, (re)populate description from line text and clear "touched"
+                if st.session_state.rr_state.get("last_key") != sel_key:
+                    cleaned = _clean_text_for_line(items_df, proj_pick, vend_pick, wo_pick, line_pick) if line_pick != "NEW" else ""
+                    st.session_state["rr-desc"] = cleaned                   # <- sets the textarea content
+                    st.session_state["rr-line_item"] = cleaned              # keep line_item == description
+                    st.session_state.rr_state.update({"touched": False, "last_key": sel_key})
+
+                # Small callback to mark that user edited description
+                def _mark_desc_touched():
+                    st.session_state.rr_state["touched"] = True
+                st.text_area("Description (auto = line text; you can edit)", key="rr-desc", on_change=_mark_desc_touched)
+
+                # UOM / Stage (kept from DF but editable)
+                if "rr-uom" not in st.session_state or st.session_state.rr_state["touched"] is False:
+                    # (re)prefill on selection change; keep user edits after touched=True
+                    prefill_data = _prefill_from_line(items_df, proj_pick, vend_pick, wo_pick, line_pick) if line_pick != "NEW" else {}
+                    st.session_state["rr-uom"] = prefill_data.get("uom", "")
+                    st.session_state["rr-stage"] = prefill_data.get("stage", "")
+
+                st.text_input("UOM", key="rr-uom")
+                st.text_input("Stage", key="rr-stage")
+                qty_val = st.number_input("Quantity", min_value=0.0, step=1.0, key="rr-qty")
+                remarks_v = st.text_input("Remarks (optional)", key="rr-remarks")
 
                 with st.expander("✅ Approval Recipients (master admin)"):
                     st.caption("Recipients here will receive emails when a request is Pending Admin Approval.")
