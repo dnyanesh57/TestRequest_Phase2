@@ -94,7 +94,7 @@ div.stButton>button, .stDownloadButton>button {
 </style>
 """, unsafe_allow_html=True)
 # Token landing page
-query_params = st.query_params()
+query_params = st.query_params
 reset_tok = (query_params.get("reset_token") or [None])[0]
 
 if reset_tok:
