@@ -94,31 +94,21 @@ div.stButton>button, .stDownloadButton>button {
 </style>
 """, unsafe_allow_html=True)
 # Token landing page
-query_params = st.query_params
-reset_tok = (query_params.get("reset_token") or [None])[0]
+DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
+DEFAULT_GH_FOLDER = "data"                           # folder inside repo
+DEFAULT_GH_BRANCH = "master" 
 
-if reset_tok:
-    st.title("Reset Password")
-    new1 = st.text_input("New password", type="password", key="rp-new1")
-    new2 = st.text_input("Confirm new password", type="password", key="rp-new2")
-    if st.button("Set New Password", key="rp-btn"):
-        if not new1 or not new2:
-            st.error("Please fill both fields.")
-        elif new1 != new2:
-            st.error("Passwords do not match.")
-        else:
-            try:
-                from db_adapter import complete_password_reset
-                ok, msg, email = complete_password_reset(reset_tok, new1)
-                if ok:
-                    st.success("Password reset successful. Please log in with your new password.")
-                    # Clear the token from URL
-                    st.query_params.clear()
-                else:
-                    st.error(msg)
-            except Exception as e:
-                st.error(f"Error resetting password: {e}")
-    st.stop()  # Show only this page while handling reset
+GITHUB_TOKEN = None
+try:
+    GITHUB_TOKEN = st.secrets.get("github", {}).get("token")
+except Exception:
+    pass
+if not GITHUB_TOKEN:
+    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+def brand_header():
+    st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
+    st.markdown('<hr class="brand" />', unsafe_allow_html=True)
 
 
 # ----- Deep-link & URL helpers -----
@@ -140,29 +130,56 @@ def app_link(**params) -> str:
     return f"?{qp}" if qp else "?"
 
 
-
-
-
-
-
-
-DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
-DEFAULT_GH_FOLDER = "data"                           # folder inside repo
-DEFAULT_GH_BRANCH = "master" 
-
-GITHUB_TOKEN = None
+# ------------------------ Password Reset Route (very early) ------------------------
+# Works on both old/new Streamlit param APIs
 try:
-    GITHUB_TOKEN = st.secrets.get("github", {}).get("token")
+    _params = st.query_params  # dict-like on recent versions
 except Exception:
-    pass
-if not GITHUB_TOKEN:
-    GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
-def brand_header():
-    st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="brand" />', unsafe_allow_html=True)
+    _params = st.experimental_get_query_params()
 
+def _get_param(name: str, default: str = "") -> str:
+    v = _params.get(name, default)
+    if isinstance(v, list):  # experimental_get_query_params returns lists
+        return v[0] if v else default
+    return v or default
 
+def render_password_reset_view(token: str):
+    brand_header()  # fine if you keep your header styles
+    st.markdown("## Reset your password")
+    st.caption("Enter a new password below.")
+    p1 = st.text_input("New password", type="password", key="pw1")
+    p2 = st.text_input("Confirm new password", type="password", key="pw2")
+
+    colA, colB = st.columns([1,1])
+    with colA:
+        if st.button("Update password", type="primary", key="btn-update-pass"):
+            if not p1 or not p2:
+                st.error("Please enter and confirm your new password.")
+            elif p1 != p2:
+                st.error("Passwords do not match.")
+            else:
+                try:
+                    ok, msg, email = complete_password_reset(token, p1)
+                    if ok:
+                        st.success("Password updated. You can now sign in from the login panel.")
+                    else:
+                        st.error(msg or "Reset failed. The link may be invalid or expired.")
+                except Exception as e:
+                    st.error(f"Unexpected error: {e}")
+    with colB:
+        st.link_button("Back to app", app_link(), type="secondary")
+
+# Route gate: HANDLE RESET BEFORE LOGIN
+_view = _get_param("view")
+if _view == "reset":
+    _token = _get_param("token")
+    if not _token:
+        brand_header(); st.error("Missing reset token."); st.stop()
+    # Optional quick pre-check so invalid tokens show a friendly message
+    if not verify_reset_token(_token):
+        brand_header(); st.error("This reset link is invalid or has expired."); st.stop()
+    render_password_reset_view(_token)
+    st.stop()
 # Ensure vendor email & mail-log tables exist
 try:
     ensure_vendor_email_tables()
@@ -804,50 +821,6 @@ def _is_tab_enabled(tab_label: str) -> bool:
 
 def can_view(tab_label: str) -> bool:
     return _is_tab_enabled(tab_label) and has_tab_access(tab_label)
-# ----- Handle deep-links BEFORE login gate -----
-# Streamlit has two APIs depending on version; try both:
-try:
-    _params = st.query_params  # new API returns a dict-like object
-except Exception:
-    _params = st.experimental_get_query_params()
-
-def _get_param(name: str, default: str = "") -> str:
-    v = _params.get(name, default)
-    if isinstance(v, list):  # experimental_get_query_params returns lists
-        return v[0] if v else default
-    return v or default
-
-def render_password_reset_view(token: str):
-    brand_header()
-    st.markdown("## Reset your password")
-    st.caption("Set a new password for your SJCPL account.")
-    p1 = st.text_input("New password", type="password", key="pw1")
-    p2 = st.text_input("Confirm new password", type="password", key="pw2")
-    col1, col2 = st.columns([1,1])
-    with col1:
-        if st.button("Update password", type="primary", key="do-reset"):
-            if not p1 or not p2:
-                st.error("Please enter and confirm your new password."); st.stop()
-            if p1 != p2:
-                st.error("Passwords do not match."); st.stop()
-            ok, msg, email = complete_password_reset(token, p1)
-            if ok:
-                st.success("Password updated. You can sign in now from the login panel.")
-            else:
-                st.error(msg or "Reset failed. The link may be invalid or expired.")
-    with col2:
-        st.link_button("Back to app", app_link(), type="secondary")
-
-_view = _get_param("view")
-if _view == "reset":
-    _token = _get_param("token")
-    if not _token:
-        brand_header(); st.error("Missing reset token."); st.stop()
-    # Optional quick pre-check so invalid tokens show a friendly message
-    if not verify_reset_token(_token):
-        brand_header(); st.error("This reset link is invalid or has expired."); st.stop()
-    render_password_reset_view(_token)
-    st.stop()
 
 
 # ----------------------------- Helpers (Phase-1) -----------------------------
@@ -2960,7 +2933,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
                                     st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
                                 with c3:
-                                    st.markdown("**Instruction (II_) & Dates**")
+                                    st.markdown("**Instruction (II) & Dates**")
                                     st.write(f"WO Title: {r.get('OI_Title','')}")
                                     st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
                                     st.write(f"Approval: {r.get('II_Approval Status','')}")
