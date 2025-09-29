@@ -113,7 +113,7 @@ if reset_tok:
                 if ok:
                     st.success("Password reset successful. Please log in with your new password.")
                     # Clear the token from URL
-                    st.query_params()
+                    st.query_params.clear()
                 else:
                     st.error(msg)
             except Exception as e:
