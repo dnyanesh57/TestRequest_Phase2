@@ -12,7 +12,7 @@ from db_adapter import (
     read_company_meta, write_company_meta,
     upsert_requirements,
     # Add these with your other db_adapter imports:
-    read_vendor_contacts, upsert_vendor_contact, get_vendor_email,
+    read_vendor_contacts, upsert_vendor_contact, get_vendor_email, 
     log_requirement_email, ensure_vendor_email_tables,
     ensure_approval_recipient_tables, read_approval_recipients,
     mark_vendor_emailed, ensure_reqlog_email_columns, # Add these with your other db_adapter imports:
@@ -1826,6 +1826,75 @@ def _can_send_vendor_email(status: str) -> bool:
     s = (status or "").strip()
     return s in ("Approved", "Auto Approved")
 
+def email_vendors_if_autoapproved(
+    rows_from_generation: list[dict],
+    pdf_bytes: bytes,
+    requester_name: str,
+    requester_email: str,
+    send_if_checked: bool
+) -> None:
+    """Send vendor emails for rows that are Auto Approved and not already emailed."""
+    if not send_if_checked or not rows_from_generation or not pdf_bytes:
+        return
+
+    # Imports here so any adapter errors show to the user
+    from db_adapter import (
+        read_requirements_by_refs,
+        get_vendor_email,
+        log_requirement_email,
+        mark_vendor_emailed,
+    )
+
+    refs = [r.get("ref") for r in rows_from_generation if r.get("ref")]
+    if not refs:
+        return
+
+    # Re-read the latest rows from DB to know the current status and emailed flags
+    latest = read_requirements_by_refs(refs)
+    by_ref = {r.get("ref"): r for r in latest}
+
+    sent_refs = []
+    sent_count = 0
+
+    for r in rows_from_generation:
+        ref = r.get("ref")
+        if not ref:
+            continue
+        lr = by_ref.get(ref, r)  # latest row if available
+        status = str(lr.get("status", ""))
+
+        # Skip if not Auto Approved
+        if status != "Auto Approved":
+            continue
+
+        # Skip if already emailed to vendor
+        if lr.get("emailed_vendor_at") or lr.get("vendor_emailed_at"):
+            continue
+
+        v_email = get_vendor_email(lr.get("vendor", ""))
+        if not v_email:
+            # No vendor email saved — skip silently (or show a toast elsewhere)
+            continue
+
+        # Subject + HTML EXACTLY as you requested
+        subject = f"SJCPL — Test Request: {ref}"
+        html = build_vendor_email_html(lr)
+        attach_name = f"{ref}.pdf"
+
+        ok, msg = send_email_via_smtp(to_email=v_email, subject=subject, html_body=html, attachment_bytes=pdf_bytes, attachment_name=attach_name)
+
+        log_requirement_email(ref=ref, vendor=lr.get("vendor", ""), email=v_email, subject=subject, ok=ok, error=None if ok else (msg or "send failed"))
+
+        if ok:
+            sent_refs.append(ref)
+            sent_count += 1
+
+    if sent_refs:
+        try:
+            mark_vendor_emailed(sent_refs, requester_email)
+        except Exception:
+            pass
+        st.success(f"Vendor emailed for {sent_count} auto-approved request(s).")
 
 def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> bytes:
     buf = io.BytesIO()
@@ -2532,6 +2601,10 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
     return html
 
 def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_meta: Dict):
+    # Ensure 'generated_at' is a datetime object for sorting
+    if 'generated_at' in df_filtered.columns:
+        df_filtered['generated_at'] = pd.to_datetime(df_filtered['generated_at'], errors='coerce')
+
     """Renders single-ref 'View' (HTML preview) and 'Print' (PDF download) inside Requirements Registry tab."""
     if df_filtered.empty:
         st.caption("No records to view/print in current filter.")
@@ -3344,6 +3417,10 @@ for i, tab_label in enumerate(visible_tabs):
                                     requester_name = first_row.get("generated_by_name", "Requester")
                                     
                                     approver_emails = list_approver_emails(pc, vk, rt)
+                                    email_vendor_now = st.checkbox(
+                                        "Email vendor automatically if this request is auto-approved",
+                                        value=False,
+                                        key="rq-email-vendor-now",)
                                     if not approver_emails:
                                         st.warning("No approval recipients configured for this scope. Add them in Admin → Approval Recipients.")
                                     else:

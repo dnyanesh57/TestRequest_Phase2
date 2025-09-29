@@ -65,7 +65,7 @@ def _none_if_nat(v):
         # Treat pandas NaT/NaN
         try:
             if pd.isna(v):
-                return None
+                return None # Return None for pandas NaT/NaN
         except Exception:
             pass
         # Treat string "NaT" or blanks as NULL
@@ -453,6 +453,10 @@ def upsert_requirements(rows: list[dict]) -> None:
     if not rows: return
     # sanitize first (prevents 'NaT' into timestamptz)
     rows = [_sanitize_row_timestamps(dict(r)) for r in rows]
+    # Convert any remaining pd.NaT to None for database insertion
+    for row in rows:
+        for k, v in row.items():
+            row[k] = None if pd.isna(v) else v
     cols = rows[0].keys()
     keys = ",".join(cols)
     placeholders = ",".join([f":{c}" for c in cols])
