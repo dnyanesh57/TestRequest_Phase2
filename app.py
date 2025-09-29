@@ -280,6 +280,7 @@ def build_vendor_email_html(row: dict) -> str:
     qty = f"{row.get('qty',''):.2f}" if isinstance(row.get('qty'), (int, float)) else str(row.get('qty',''))
     stage = row.get("stage","")
     dt_gen = row.get("generated_at","")
+    line_item = row.get("line_item", "")
     return f"""
     <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
       <p>Dear Vendor <b>{vendor}</b>,</p>
@@ -287,7 +288,9 @@ def build_vendor_email_html(row: dict) -> str:
       <table style="border-collapse:collapse;font-size:13px;width:100%">
         <tr><td style="padding:4px 8px"><b>Type</b></td><td style="padding:4px 8px">{req_type}</td></tr>
         <tr><td style="padding:4px 8px"><b>Item</b></td><td style="padding:4px 8px">{desc}</td></tr>
-        <tr><td style="padding:4px 8px"><b>Qty</b></td><td style="padding:4px 8px">{qty} {uom}</td></tr>
+      <tr><td style="padding:4px 8px"><b>Line Item</b></td><td style="padding:4px 8px">{line_item or '-'}</td></tr>
+      <tr><td style="padding:4px 8px"><b>Item</b></td><td style="padding:4px 8px">{desc}</td></tr>
+      <tr><td style="padding:4px 8px"><b>Qty</b></td><td style="padding:4px 8px">{qty} {uom}</td></tr>
         <tr><td style="padding:4px 8px"><b>Stage</b></td><td style="padding:4px 8px">{stage or '-'}</td></tr>
         <tr><td style="padding:4px 8px"><b>Generated</b></td><td style="padding:4px 8px">{dt_gen}</td></tr>
       </table>
@@ -848,6 +851,36 @@ def has_tab_access(tab_label: str) -> bool:
     return True if "*" in tabs else (tab_label in tabs)
 
 # Renamed to _is_tab_enabled to avoid recursion with the `is_enabled` function in the global scope
+# >>> ADD: selection->form sync helper
+def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> dict:
+    """
+    Returns sensible defaults (description, uom, stage, remaining) for a chosen line.
+    If not found, returns blanks.
+    """
+    if not all([proj, vendor, wo, line_key]):
+        return {"description":"", "uom":"", "stage":"", "remaining":float("nan"), "line_item": ""}
+
+    sel = items_df[
+        (items_df["Project_Key"].astype(str)==str(proj)) &
+        (items_df["Subcontractor_Key"].astype(str)==str(vendor)) &
+        (items_df["WO_Key"].astype(str)==str(wo)) &
+        (items_df["Line_Key"].astype(str)==str(line_key))
+    ].head(1)
+
+    if sel.empty:
+        return {"description":"", "uom":"", "stage":"", "remaining":float("nan"), "line_item": ""}
+
+    r = sel.iloc[0]
+    # NOTE: 'line_item' is a human-facing label you’ll also store in the registry,
+    # e.g., "Line 8.0 — <OD_Description>"
+    line_caption = f"Line {str(r.get('Line_Key','')).strip()} — {str(r.get('OD_Description','')).strip()}"
+    return {
+        "description": str(r.get("OD_Description","")).strip(),
+        "uom":        str(r.get("OD_UOM","")).strip(),
+        "stage":      str(r.get("OD_Stage","")).strip(),
+        "remaining":  float(pd.to_numeric(r.get("Remaining_Qty"), errors="coerce")),
+        "line_item":  line_caption
+    }
 def _is_tab_enabled(tab_label: str) -> bool:
     return tab_label in st.session_state.enabled_tabs
 
@@ -1737,7 +1770,7 @@ REQUIRED_REG_COLS = [
     "status","approver","approved_at",
     # Engine extras
     "idem_key","status_detail","auto_approved_at","auto_approved_by",
-    "engine_version","snap_company_name","snap_address_1","snap_address_2"
+    "engine_version","snap_company_name","snap_address_1","snap_address_2", "line_item"
 ]
 
 def ensure_registry_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -2058,7 +2091,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             d = pd.to_datetime(p.get("generated_at")).strftime("%d-%m-%Y")
         except Exception:
             d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "—" else "—"
-
+ # Prefer showing the human "Line Item" label, then free text below it:
         # Escape description and stage
         desc = _esc(_to_text(p.get("description")))
         stage = _esc(_to_text(p.get("stage"), dash="N/A"))
@@ -2066,7 +2099,13 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
 
         qty_val = _coerce_float(p.get("qty", ""))
         qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "—"
-
+ # e.g., "Line 8.0 — Charges for AAC Block Test - Compressive Strength Test"
+ # and on next line your edited Description (if different).
+        line_item = p.get("line_item", "")
+        if line_item and line_item.lower() != desc.lower():
+            item_desc_text = f"<b>{line_item}</b><br/>{desc} <br/> (Stage: {stage})"
+        else:
+            item_desc_text = f"{desc} <br/> (Stage: {stage})"
         row_data = [
             "1",
             _esc(d),
@@ -2152,6 +2191,7 @@ def generate_pdf_and_log_lines(
             "remaining_at_request": entry.get("remaining_at_request",""),
             "approval_required": entry.get("approval_required", False),
             "approval_reason": entry.get("approval_reason",""),
+            "line_item": entry.get("line_item",""),
             "is_new_item": bool(entry.get("is_new_item", False)),
             "generated_at": now_iso, "generated_by_name": created_by, "generated_by_email": email,
             "status": status, "approver": (auto_by or ""), "approved_at": (now_iso if auto_by else ""),
