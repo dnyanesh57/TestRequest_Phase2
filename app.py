@@ -1,6 +1,6 @@
 # wo_phase2_dashboard_sjcpl.py
 # SJCPL — Work Order Dashboard (Phase 1 + Phase 2) — Integrated Engine
-# Final, Complete, and Functional Version
+# Final, Complete, and Functional Version (with password reset)
 from __future__ import annotations
 import io, os, uuid, hmac, hashlib, json, base64,requests
 import datetime as dt
@@ -22,6 +22,9 @@ from db_adapter import (
     update_requirement_status, read_requirements_by_refs, _conn,
     
     read_app_settings, write_app_settings,   # NEW
+    # Password reset helpers from your db layer (make sure they exist in db_adapter)
+    start_password_reset, verify_reset_token, complete_password_reset,
+
 )
 import numpy as np
 import pandas as pd
@@ -32,6 +35,7 @@ import urllib.request
 import urllib.error
 import pytz
 
+import urllib.parse  # NEW for deep links
 # PDF (pure-Python)
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib import colors
@@ -72,8 +76,25 @@ div.stButton>button, .stDownloadButton>button {
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; }
+.big-title { font-size: 32px; font-weight: 800; margin: 0 0 0.2rem 0;
+  background: linear-gradient(90deg, #00AEDA 0%, #000000 50%, #939598 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.subtle { color: #4d4d4d; margin-top: -8px; }
+hr.brand { border: none; height: 4px; background: linear-gradient(90deg,#00AEDA,#939598); border-radius: 2px; }
+div.stButton>button, .stDownloadButton>button {
+  border-radius: 10px; padding: 0.5rem 1rem; font-weight: 600; border: 1px solid #00AEDA33;
+}
+.lowpill { display:inline-block; padding:2px 8px; border-radius:999px; background:#ffe5e5; color:#c40000; font-weight:600; font-size:12px; }
+.codebox { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background:#f6f8fa; border:1px solid #e1e4e8; border-radius:8px; padding:10px; white-space:pre-wrap; }
+</style>
+""", unsafe_allow_html=True)
 # Token landing page
-query_params = st.experimental_get_query_params()
+query_params = st.query_params()
 reset_tok = (query_params.get("reset_token") or [None])[0]
 
 if reset_tok:
@@ -92,30 +113,36 @@ if reset_tok:
                 if ok:
                     st.success("Password reset successful. Please log in with your new password.")
                     # Clear the token from URL
-                    st.experimental_set_query_params()
+                    st.query_params()
                 else:
                     st.error(msg)
             except Exception as e:
                 st.error(f"Error resetting password: {e}")
     st.stop()  # Show only this page while handling reset
 
-st.markdown("""
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
-html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; }
-.big-title { font-size: 32px; font-weight: 800; margin: 0 0 0.2rem 0;
-  background: linear-gradient(90deg, #00AEDA 0%, #000000 50%, #939598 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-.subtle { color: #4d4d4d; margin-top: -8px; }
-hr.brand { border: none; height: 4px; background: linear-gradient(90deg,#00AEDA,#939598); border-radius: 2px; }
-div.stButton>button, .stDownloadButton>button {
-  border-radius: 10px; padding: 0.5rem 1rem; font-weight: 600; border: 1px solid #00AEDA33;
-}
-.lowpill { display:inline-block; padding:2px 8px; border-radius:999px; background:#ffe5e5; color:#c40000; font-weight:600; font-size:12px; }
-.codebox { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  background:#f6f8fa; border:1px solid #e1e4e8; border-radius:8px; padding:10px; white-space:pre-wrap; }
-</style>
-""", unsafe_allow_html=True)
+
+# ----- Deep-link & URL helpers -----
+try:
+    APP_BASE_URL = st.secrets.get("app", {}).get("base_url", "").rstrip("/")
+except Exception:
+    APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")
+
+def app_link(**params) -> str:
+    """
+    Build a link to this app with query params (e.g., view='reset', token='...').
+    If no APP_BASE_URL is configured, returns '?k=v' (works as in-app link).
+    """
+    qp = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    if APP_BASE_URL and qp:
+        return f"{APP_BASE_URL}?{qp}"
+    if APP_BASE_URL:
+        return APP_BASE_URL
+    return f"?{qp}" if qp else "?"
+
+
+
+
+
 
 
 
@@ -772,6 +799,474 @@ def has_tab_access(tab_label: str) -> bool:
     return True if "*" in tabs else (tab_label in tabs)
 
 def is_enabled(tab_label: str) -> bool:
+    ok = is_enabled(tab_label) and has_tab_access(tab_label)
+    if not ok:
+        st.warning(f"You do not have access to the '{tab_label}' tab, or it has been disabled by an administrator.")
+    return ok
+
+# ----- Handle deep-links BEFORE login gate -----
+# Streamlit has two APIs depending on version; try both:
+try:
+    _params = st.query_params  # new API returns a dict-like object
+except Exception:
+    _params = st.experimental_get_query_params()
+
+def _get_param(name: str, default: str = "") -> str:
+    v = _params.get(name, default)
+    if isinstance(v, list):  # experimental_get_query_params returns lists
+        return v[0] if v else default
+    return v or default
+
+def render_password_reset_view(token: str):
+    brand_header()
+    st.markdown("## Reset your password")
+    st.caption("Set a new password for your SJCPL account.")
+    p1 = st.text_input("New password", type="password", key="pw1")
+    p2 = st.text_input("Confirm new password", type="password", key="pw2")
+    col1, col2 = st.columns([1,1])
+    with col1:
+        if st.button("Update password", type="primary", key="do-reset"):
+            if not p1 or not p2:
+                st.error("Please enter and confirm your new password."); st.stop()
+            if p1 != p2:
+                st.error("Passwords do not match."); st.stop()
+            ok, msg, email = complete_password_reset(token, p1)
+            if ok:
+                st.success("Password updated. You can sign in now from the login panel.")
+            else:
+                st.error(msg or "Reset failed. The link may be invalid or expired.")
+    with col2:
+        st.link_button("Back to app", app_link(), type="secondary")
+
+_view = _get_param("view")
+if _view == "reset":
+    _token = _get_param("token")
+    if not _token:
+        brand_header(); st.error("Missing reset token."); st.stop()
+    # Optional quick pre-check so invalid tokens show a friendly message
+    if not verify_reset_token(_token):
+        brand_header(); st.error("This reset link is invalid or has expired."); st.stop()
+    render_password_reset_view(_token)
+    st.stop()
+
+
+# ----------------------------- Helpers (Phase-1) -----------------------------
+def coerce_number(s: pd.Series) -> pd.Series:
+    """
+    Robust numeric coercion:
+    - Trims, removes NBSP, collapses spaces
+    - Converts parentheses to negatives: (123.45) -> -123.45
+    - Removes thousands separators
+    - Keeps digits, dot, and minus only
+    """
+    if s.dtype.kind in "biufc":
+        return s.astype(float)
+
+    # to string
+    s = s.astype(str)
+
+    # normalize whitespace & NBSP
+    s = s.str.replace("\u00a0", " ", regex=False).str.strip()
+    s = s.str.replace(r"\s+", " ", regex=True)
+
+    # parentheses negative: "(123.45)" -> "-123.45"
+    s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+
+    # drop common prefixes/suffixes (units/labels around numbers)
+    # keep a conservative approach: strip everything except digits, dot, minus and comma
+    s = s.str.replace(r"[^0-9\.\-,]", "", regex=True)
+
+    # if there are both comma and dot, treat comma as thousands sep; if only comma, treat as decimal
+    has_comma = s.str.contains(",", regex=False, na=False)
+    has_dot   = s.str.contains(r"\.", regex=True, na=False)
+
+    # only comma and no dot -> comma is decimal
+    s = s.mask(has_comma & (~has_dot), s.str.replace(",", ".", regex=False))
+
+    # both comma and dot or only dot -> comma is thousands separator
+    s = s.str.replace(",", "", regex=False)
+
+    return pd.to_numeric(s, errors="coerce")
+
+
+def coerce_date(s: pd.Series) -> pd.Series:
+    return pd.to_datetime(s, errors="coerce", dayfirst=True, infer_datetime_format=True)
+
+def dedupe_columns(cols: List[str]) -> List[str]:
+    seen = {}; out = []
+    for c in cols:
+        if c in seen: seen[c]+=1; out.append(f"{c}.{seen[c]}")
+        else: seen[c]=0; out.append(c)
+    return out
+
+def present_cols(df: pd.DataFrame, candidates: Sequence[str]) -> List[str]:
+    return [c for c in candidates if c in df.columns]
+
+@st.cache_data
+def group_totals(df: pd.DataFrame) -> Tuple[float,float,float,float,float,int,int]:
+    if df.empty: return (0.0,0.0,0.0,0.0,0.0,0,0)
+    return (float(df["Initial_Qty"].sum()),
+            float(df["Remeasure_Add"].sum()),
+            float(df["Revised_Qty"].sum()),
+            float(df["Used_Qty"].sum()),
+            float(df["Remaining_Qty"].sum()),
+            int(df["Line_Key"].nunique()),
+            int(df["Low_Flag"].sum()) if "Low_Flag" in df.columns else 0)
+
+@st.cache_data
+def annotate_low(df: pd.DataFrame, metric: str, threshold: float) -> pd.DataFrame:
+    df = df.copy()
+    if metric not in df.columns: df[metric] = np.nan
+    df["Low_Flag"] = df[metric] < threshold
+    df["Low_Tag"]  = np.where(df["Low_Flag"], "🔴 Low", "")
+    return df
+_PAGE_SIZE = landscape(A4)
+_MARGINS = dict(left=18, right=18, top=18, bottom=18)
+_AVAIL_W = _PAGE_SIZE[0] - _MARGINS["left"] - _MARGINS["right"]
+# ---------------------- Column Mapping ----------------------
+PREFIX_MAPPING: Dict[str, List[str]] = {
+    "OI_": [
+        'Project','L1 Analysis Code','L2 Analysis Code','Unnamed: 3','Unnamed: 4',
+        'L3 Analysis Code','Unnamed: 6','L4 Analysis Code','L5 Analysis Code','Step Code',
+        'Step Name','Unnamed: 11','Unnamed: 12','Ref. #','Date','External Ref. #',
+        'Subcontractor Code','Subcontractor Name','Trade','Title','Originator','Status',
+        'Finalisation Status','Currency','Valuation Applicable','TA Ref. #','TA Revision #'
+    ],
+    "II_": [
+        'Ref. #.1','Date.1','Title.1','Originator.1','Instruction Status',
+        'Finalisation Status.1','Approval Status','Nature Code','Nature Name',
+        'Client Change','Client Change Type Code','Client Change Type Name',
+        'Contract Variation','CVR Variation Category - Inst Code',
+        'CVR Variation Category - Inst Name','TA Ref. #.1','TA Revision #.1','Claim Amount'
+    ],
+    "OD_": [
+        'Line #','Line Type','BOQ Item','Rate Only','Internal Item','Trade.1',
+        'Description','UOM','Qty.','Rate','Amount','Remarks','Contract Item Ref. #',
+        'IBR Item Ref. #','Cost Code','Cost Code Description','Cost Head Code',
+        'Cost Head Description','Prime Activity Code','Prime Activity Name','Phase',
+        'Block','Plot','VAT Type','VAT Code','Stage'
+    ],
+    "RMC_": ['Qty..1','Amount.1'],
+    "RV_":  ['Qty..2','Amount.2'],
+    "CERT_": ['Cert. Qty..1','Cert. Amount.1'],
+    "RMN_":  ['Cert. Qty..2','Cert. Amount.2'],
+}
+REVERSE_MAP = {c: f"{p}{c}" for p, cols in PREFIX_MAPPING.items() for c in cols}
+
+def rename_with_prefix(df: pd.DataFrame) -> pd.DataFrame:
+    raw_cols = dedupe_columns([str(c).strip() for c in df.columns])
+    df.columns = [REVERSE_MAP.get(c, c) for c in raw_cols]
+    return df
+def find_qty_source(df: pd.DataFrame, canonical: str) -> str:
+    """
+    Given a canonical key like 'OD_Qty.' returns the actual column name
+    found in df using fuzzy matching over known aliases.
+    If nothing is found, returns the canonical string (which upstream code
+    guards by creating the column if missing).
+    """
+    aliases = _QUANTITY_ALIASES.get(canonical, [canonical])
+    hit = best_col_fuzzy(df, aliases)
+    return hit or canonical
+
+def best_col(df: pd.DataFrame, base: str) -> str | None:
+    if base in df.columns: return base
+    cand = [c for c in df.columns if c.startswith(base)]
+    if cand: return cand[0]
+    if "_" in base:
+        raw = base.split("_", 1)[1]
+        if raw in df.columns: return raw
+        cand2 = [c for c in df.columns if c.startswith(raw)]
+        if cand2: return cand2[0]
+    return None
+
+def get_most_recent_file(directory: str) -> str | None:
+    try:
+        files = [os.path.join(directory, f) for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
+        if not files:
+            return None
+        return max(files, key=os.path.getmtime)
+    except Exception:
+        return None
+# --- GitHub data helpers ---
+# --- GitHub data helpers (improved diagnostics + raw fallback) ---
+def _gh_headers():
+    tok = (st.secrets.get("github", {}) or {}).get("token")
+    h = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "SJCPL-WO-Dashboard",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
+    return h
+
+def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
+    """
+    Lists CSV/XLSX files under the given folder via GitHub Contents API.
+    Raises with a descriptive error if anything goes wrong.
+    """
+    url = f"https://api.github.com/repos/{repo}/contents/{folder}"
+    try:
+        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20)
+        if r.status_code != 200:
+            # Bubble up readable diagnostics in UI
+            try:
+                detail = r.json().get("message", "")
+            except Exception:
+                detail = r.text[:200]
+            raise RuntimeError(f"GitHub list error {r.status_code}: {detail} (repo={repo}, folder={folder}, branch={branch})")
+        data = r.json()
+        if not isinstance(data, list):
+            raise RuntimeError(f"Unexpected response for contents list: {type(data)}")
+        return [x for x in data if x.get("type") == "file" and x["name"].lower().endswith((".csv",".xlsx",".xls"))]
+    except RuntimeError as e:
+        if "API rate limit exceeded" in str(e):
+            st.error("GitHub API rate limit exceeded. Please add a GitHub token to your secrets to increase the rate limit.")
+            st.info("1. Create a file named `.streamlit/secrets.toml` in your project directory.\n2. Add the following content to the file:\n```toml\n[github]\ntoken = \"YOUR_GITHUB_TOKEN\"\n```\n3. Replace `YOUR_GITHUB_TOKEN` with a GitHub personal access token.")
+        raise e
+
+def gh_last_commit_iso(repo: str, path: str, branch: str) -> str:
+    url = f"https://api.github.com/repos/{repo}/commits"
+    r = requests.get(url, headers=_gh_headers(), params={"path": path, "sha": branch, "per_page": 1}, timeout=20)
+    if r.status_code != 200:
+        return ""
+    js = r.json()
+    try:
+        return js[0]["commit"]["committer"]["date"]
+    except Exception:
+        return ""
+
+def gh_pick_latest(repo: str, folder: str, branch: str) -> dict|None:
+    items = gh_list_folder(repo, folder, branch)
+    if not items:
+        return None
+    enriched = []
+    for it in items:
+        it["_last"] = gh_last_commit_iso(repo, f"{folder}/{it['name']}", branch)
+        enriched.append(it)
+    enriched.sort(key=lambda x: (x.get("_last") or "", x["name"]), reverse=True)
+    return enriched[0]
+
+def gh_download(download_url: str) -> bytes:
+    r = requests.get(download_url, headers=_gh_headers(), timeout=40)
+    if r.status_code != 200:
+        try:
+            detail = r.json().get("message", "")
+        except Exception:
+            detail = r.text[:200]
+        raise RuntimeError(f"GitHub download error {r.status_code}: {detail}")
+    return r.content
+
+def load_table_from_bytes(data: bytes, filename: str) -> pd.DataFrame:
+    name = filename.lower(); bio = io.BytesIO(data); bio.name = filename
+    try:
+        if name.endswith(".csv"):
+            # If your CSVs do NOT have two junk rows at the top, change skiprows=2 -> 0
+            return pd.read_csv(bio, encoding="latin1", engine="python", skiprows=2)
+        return pd.read_excel(bio, skiprows=2, engine="openpyxl")
+    except Exception as e:
+        st.error(f"GitHub file parse error for {filename}: {e}")
+        return pd.DataFrame()
+
+def _raw_url(repo: str, branch: str, path: str) -> str:
+    return f"https://raw.githubusercontent.com/{repo}/{branch}/{path}"
+
+def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd.DataFrame, str]:
+    """
+    1) Use Contents API to find most-recent CSV/XLSX by last commit.
+    2) Download via the provided 'download_url'.
+    3) If listing fails, try raw.githubusercontent.com with common names.
+    """
+    try:
+        meta = gh_pick_latest(repo, folder, branch)
+        if meta:
+            raw = gh_download(meta["download_url"])
+            return (load_table_from_bytes(raw, meta["name"]), f"GitHub: {meta['name']}")
+        # No CSV/XLSX in the folder
+        raise RuntimeError(f"No CSV/XLSX found in '{folder}' on branch '{branch}'.")
+    except Exception as e:
+        # Fallback: raw URL with common names (helps when Contents API is rate-limited)
+        common_names = ["work_orders.csv", "wo.csv", "data.csv", "items.csv", "work_orders.xlsx", "wo.xlsx"]
+        for fname in common_names:
+            try:
+                url = _raw_url(repo, branch, f"{folder.rstrip('/')}/{fname}")
+                r = requests.get(url, headers={"User-Agent":"SJCPL-WO-Dashboard"}, timeout=20)
+                if r.status_code == 200:
+                    return (load_table_from_bytes(r.content, fname), f"GitHub (raw): {fname}")
+            except Exception:
+                pass
+        # Surface the real reason
+        st.error(f"GitHub load failed: {e}")
+        return (pd.DataFrame(), "")
+
+# ---------------------- Load ----------------------
+# 1) Stop hitting GitHub on every rerun
+# Only fetch from GitHub when the admin presses a button; otherwise reuse what’s already loaded.
+# after login/bootstrap:
+if "_raw_df_cache" not in st.session_state:
+    st.session_state._raw_df_cache = None
+    st.session_state._raw_df_meta  = ""
+
+# 2) Cache expensive transforms with explicit keys
+# compute_items() depends only on raw_df content. Hash the bytes so the cache is stable.
+@st.cache_data(show_spinner=False, max_entries=3)
+def _df_signature(df: pd.DataFrame) -> str:
+    # robust-ish signature for cache key
+    h = hashlib.sha1()
+    h.update(str(df.shape).encode())
+    h.update("|".join(df.columns.astype(str)).encode())
+    h.update(pd.util.hash_pandas_object(df.head(50), index=False).values.tobytes())
+    return h.hexdigest()
+def load_table(upload) -> pd.DataFrame:
+    if upload is None: return pd.DataFrame()
+    name = upload.name.lower()
+    try:
+        if name.endswith(".csv"):
+            df = pd.read_csv(upload, encoding="latin1", engine="python", skiprows=2)
+        elif name.endswith((".xlsx", ".xls")):
+            df = pd.read_excel(upload, skiprows=2, engine="openpyxl")
+        else:
+            st.error("Please upload a .csv or .xlsx file."); return pd.DataFrame()
+        return df
+    except Exception as e:
+        st.error(f"Error loading file: {e}")
+        return pd.DataFrame()
+
+# ---------------------- Transform (robust) ----------------------
+# 6) Vectorize types early (smaller & faster)
+# Cut memory + speed up groupbys.
+def _shrink(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    num_cols = ["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]
+    for c in num_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").astype("float32")
+    cat_cols = ["Project_Key","Subcontractor_Key","WO_Key","OD_UOM","OD_Stage"]
+    for c in cat_cols:
+        if c in df.columns:
+            df[c] = df[c].astype("category")
+    return df
+
+
+
+
+
+@st.cache_data
+def compute_items(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty: return df
+    df = rename_with_prefix(df)
+
+    col_ref  = best_col(df, "OI_Ref. #") or "OI_Ref. #"
+    col_proj = best_col(df, "OI_Project") or "OI_Project"
+    col_subc = best_col(df, "OI_Subcontractor Name") or "OI_Subcontractor Name"
+    col_date = best_col(df, "OI_Date") or "OI_Date"
+    col_lt   = best_col(df, "OD_Line Type") or "OD_Line Type"
+    col_ln   = best_col(df, "OD_Line #") or "OD_Line #"
+
+    for need in [col_ref, col_proj, col_subc, col_lt, col_ln, col_date]:
+        if need not in df.columns: df[need] = np.nan
+
+    lt_series = df[col_lt].astype(str).str.strip().str.lower()
+    items = df.copy()  # default (some exports omit clear 'Item' tagging)
+    mask_item = (
+        lt_series.eq("item")
+    |   lt_series.str.contains(r"\bitem\b", na=False)
+    |   lt_series.str.contains(r"boq", na=False)
+)
+    if mask_item.any():
+        items = df[mask_item].copy()
+
+    # robust, alias-aware resolution
+    src_initial = find_qty_source(items, "OD_Qty.")
+    src_rmc     = find_qty_source(items, "RMC_Qty..1")
+    src_rv      = find_qty_source(items, "RV_Qty..2")
+    src_used    = find_qty_source(items, "CERT_Cert. Qty..1")
+    src_rmn     = find_qty_source(items, "RMN_Cert. Qty..2")
+
+
+    for c in [src_initial, src_rmc, src_rv, src_used, src_rmn]:
+        if c not in items.columns: items[c] = np.nan
+
+    items["Initial_Qty"]   = coerce_number(items[src_initial]).fillna(0.0)
+    items["Remeasure_Add"] = coerce_number(items[src_rmc]).fillna(0.0)
+    rv_tmp                 = coerce_number(items[src_rv])
+    items["Revised_Qty"]   = np.where(rv_tmp.notna(), rv_tmp, items["Initial_Qty"] + items["Remeasure_Add"])
+    items["Used_Qty"]      = coerce_number(items[src_used]).fillna(0.0)
+    rmn_tmp                = coerce_number(items[src_rmn])
+    items["Remaining_Qty"] = np.where(rmn_tmp.notna(), rmn_tmp, np.maximum(items["Revised_Qty"] - items["Used_Qty"], 0.0))
+
+    if col_date in items.columns: items[col_date] = coerce_date(items[col_date])
+    if best_col(items, "II_Date.1"):
+        col_iidate = best_col(items, "II_Date.1")
+        items[col_iidate] = coerce_date(items[col_iidate])
+
+    for c in [
+        "OD_Description","OD_UOM","OD_Rate","OD_Amount","OD_Remarks","OD_BOQ Item","OD_Internal Item","OD_Rate Only",
+        "OD_Cost Code","OD_Cost Code Description","OD_Cost Head Code","OD_Cost Head Description",
+        "OD_Prime Activity Code","OD_Prime Activity Name","OD_Phase","OD_Block","OD_Plot","OD_VAT Type","OD_VAT Code","OD_Stage",
+        "OI_Title","II_Title.1","II_Nature Name","II_Approval Status","II_Instruction Status","II_Finalisation Status.1","II_Claim Amount"
+    ]:
+        if best_col(items, c) and best_col(items, c) != c:
+            items[c] = items[best_col(items, c)]
+        if c not in items.columns: items[c] = np.nan
+
+    items["WO_Key"]           = items[col_ref].astype(str).str.strip()
+    items["Project_Key"]      = items[col_proj].astype(str).str.strip()
+    items["Subcontractor_Key"]= items[col_subc].astype(str).str.strip()
+    items["Line_Key"]         = items[col_ln].astype(str).str.strip()
+    if items["Line_Key"].isna().all() or (items["Line_Key"].astype(str).str.strip()=="").all():
+        items["Line_Key"] = items.groupby(["Project_Key","WO_Key"]).cumcount()+1
+        items["Line_Key"] = items["Line_Key"].astype(str)
+
+    items.__dict__["_lt_filter_note"] = (
+        "eq('Item')" if (lt_series.eq("item").any())
+        else ("contains('item')" if (lt_series.str.contains("item", na=False).any()) else "no-filter (fallback)")
+    )
+    return items
+
+@st.cache_data
+def wo_summary(items: pd.DataFrame) -> pd.DataFrame:
+    if items.empty: return items
+    return items.groupby(["WO_Key","Project_Key","Subcontractor_Key"], dropna=False).agg(
+        Lines=("Line_Key","nunique"),
+        Initial_Qty=("Initial_Qty","sum"),
+        Remeasure_Add=("Remeasure_Add","sum"),
+        Revised_Qty=("Revised_Qty","sum"),
+        Used_Qty=("Used_Qty","sum"),
+        Remaining_Qty=("Remaining_Qty","sum"),
+    ).reset_index()
+
+# 4) Avoid re-grouping massive DataFrames for every expander
+# Precompute once per filter and reuse.
+@st.cache_data(show_spinner=False, max_entries=10)
+def pre_aggregations(df: pd.DataFrame):
+    if df.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    wo = wo_summary(df)
+    proj = wo.groupby("Project_Key", dropna=False)[["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
+    sub  = wo.groupby("Subcontractor_Key", dropna=False)[["Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
+    return wo, proj, sub
+
+# ---------------------- PDF helpers ----------------------
+@st.cache_resource
+def _styles():
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="BrandTitle", fontName="Helvetica-Bold", fontSize=14, textColor=colors.HexColor(BRAND_BLACK), spaceAfter=6))
+    styles.add(ParagraphStyle(name="BrandH2", fontName="Helvetica-Bold", fontSize=12, textColor=colors.HexColor(BRAND_BLUE), spaceAfter=4))
+    styles.add(ParagraphStyle(name="Small", fontName="Helvetica", fontSize=8, textColor=colors.black, leading=10))
+    styles.add(ParagraphStyle(name="Mini", fontName="Helvetica", fontSize=7, textColor=colors.black, leading=9))
+    styles.add(ParagraphStyle(name="Cell", fontName="Helvetica", fontSize=8, leading=10, wordWrap="CJK"))
+    styles.add(ParagraphStyle(name="CellBold", parent=styles["Cell"], fontName="Helvetica-Bold"))
+        # === Emphasis styles for Reference & Integrity ===
+    styles.add(ParagraphStyle(
+        name="MetaLabel",
+        parent=styles["Small"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        textColor=colors.HexColor(BRAND_BLACK),
+        leading=14,
+        spaceAfter=0,
+    ))
     return tab_label in st.session_state.enabled_tabs
 
 def can_view(tab_label: str) -> bool:
