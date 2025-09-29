@@ -3020,34 +3020,66 @@ for i, tab_label in enumerate(visible_tabs):
                             if row.empty:
                                 st.warning("Selection not found.")
                             else:
-                                r = row.iloc[0]
-                                c1, c2, c3 = st.columns([2,2,3])
-                                with c1:
-                                    st.markdown("**Header**")
-                                    st.write(f"**Project:** {r.get('Project_Key','')}")
-                                    st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
-                                    st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
-                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}")
-                                    st.write(f"**Desc:** {r.get('OD_Description','')}")
-                                    if r.get("Remaining_Qty", np.nan) < low_threshold:
-                                        st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
-                                with c2:
-                                    st.markdown("**Quantities**")
-                                    st.write(f"Initial: {r['Initial_Qty']:.3f}  |  +Remeas: {r['Remeasure_Add']:.3f}")
-                                    st.write(f"Revised: {r['Revised_Qty']:.3f}")
-                                    st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
-                                    st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
-                                with c3:
-                                    st.markdown("**Instruction (II) & Dates**")
-                                    st.write(f"WO Title: {r.get('OI_Title','')}")
-                                    st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
-                                    st.write(f"Approval: {r.get('II_Approval Status','')}")
-                                    st.write(f"WO Date: {str(r.get('OI_Date',''))}  |  II Date: {str(r.get('II_Date.1',''))}")
+                                # --- inside the "➕ Add line to request" click handler (Existing line item) ---
+                                found_in_cart = False
+                                for item in st.session_state.req_cart:
+                                    # Match the same Project/Vendor/WO/Line (not just line_key)
+                                    if (
+                                        item["project_code"] == project_code
+                                        and item["vendor"] == vendor
+                                        and item["wo"] == wo
+                                        and item["line_key"] == line_key
+                                    ):
+                                        # Update qty AND overwrite editable fields with the latest values
+                                        item["qty"] += float(qty)
+                                        item["description"] = description.strip()  # <<< this makes your edit stick
+                                        item["uom"] = uom
+                                        item["stage"] = stage or ""
+                                        item["remarks"] = remarks.strip()
+                                        item["date_casting"] = str(date_cast) if date_cast else ""
+                                        item["date_testing"] = str(date_test) if date_test else ""
+                                        item["approval_required"] = approval_required
+                                        item["approval_reason"] = approval_reason
+                                        found_in_cart = True
+                                        st.success("Updated line in cart.")
+                                        break
 
-                                wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
-                                                      "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
-                                fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
-                                fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
+                                if not found_in_cart:
+                                 st.session_state.req_cart.append({
+                                    "project_code": project_code,
+                                    "project_name": project_code,
+                                    "request_type": request_type,
+                                    "vendor": vendor,
+                                    "wo": wo,
+                                    "line_key": line_key,
+                                    # Add other required key/value pairs here as needed
+                                })
+                            with c1:
+                                st.markdown("**Header**")
+                                st.write(f"**Project:** {r.get('Project_Key','')}")
+                                st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
+                                st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
+                                st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}")
+                                st.write(f"**Desc:** {r.get('OD_Description','')}")
+                                if r.get("Remaining_Qty", np.nan) < low_threshold:
+                                    st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
+                            with c2:
+                                st.markdown("**Quantities**")
+                                st.write(f"Initial: {r['Initial_Qty']:.3f}  |  +Remeas: {r['Remeasure_Add']:.3f}")
+                                st.write(f"Revised: {r['Revised_Qty']:.3f}")
+                                st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
+                                st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
+                            with c3:
+                                st.markdown("**Instruction (II) & Dates**")
+                                st.write(f"WO Title: {r.get('OI_Title','')}")
+                                st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
+                                st.write(f"Approval: {r.get('II_Approval Status','')}")
+                                st.write(f"WO Date: {str(r.get('OI_Date',''))}  |  II Date: {str(r.get('II_Date.1',''))}")
+    
+                            wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
+                                                  "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
+                            fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
+                               fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
                         else:
                             st.warning("Please select at least one vendor.")
 
