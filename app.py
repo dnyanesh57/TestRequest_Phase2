@@ -3020,10 +3020,29 @@ for i, tab_label in enumerate(visible_tabs):
                             if row.empty:
                                 st.warning("Selection not found.")
                             else:
-                                # --- inside the "➕ Add line to request" click handler (Existing line item) ---
+                                # After you've set: line_sel/line_key and fetched `row` for the selected line
+                                # Assuming `base_pvw` is the DataFrame containing the original data for the selected line
+                                # You need to define `base_pvw` and `line_key` based on your context.
+                                # For example:
+                                line_key = line_sel # Assuming line_sel is the selected line key
+                                base_pvw = filtered[(filtered["WO_Key"]==wo_sel) & (filtered["Line_Key"]==line_sel)]
+
+                                default_desc = str(base_pvw[base_pvw["Line_Key"] == line_key]["OD_Description"].iloc[0])
+                                # Reset the text area value when the selected line changes
+                                if st.session_state.get("_rq_last_line_key") != line_key:
+                                    st.session_state["rq-desc"] = default_desc
+                                    st.session_state["_rq_last_line_key"] = line_key
+
+                                # Always read the live value from session_state so we use exactly what the user typed
+                                description = st.text_area(
+                                    "Description (free text allowed)",
+                                    value=st.session_state.get("rq-desc", default_desc),
+                                    height=100,
+                                    key="rq-desc",
+                                )
+
                                 found_in_cart = False
                                 for item in st.session_state.req_cart:
-                                    # Match the same Project/Vendor/WO/Line (not just line_key)
                                     if (
                                         item["project_code"] == project_code
                                         and item["vendor"] == vendor
@@ -3031,7 +3050,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         and item["line_key"] == line_key
                                     ):
                                         # Update qty AND overwrite editable fields with the latest values
-                                        item["qty"] += float(qty)
+                                        item["qty"] += float(qty) # Assuming qty is defined elsewhere
                                         item["description"] = description.strip()  # <<< this makes your edit stick
                                         item["uom"] = uom
                                         item["stage"] = stage or ""
@@ -3045,14 +3064,24 @@ for i, tab_label in enumerate(visible_tabs):
                                         break
 
                                 if not found_in_cart:
-                                 st.session_state.req_cart.append({
-                                    "project_code": project_code,
-                                    "project_name": project_code,
-                                    "request_type": request_type,
-                                    "vendor": vendor,
-                                    "wo": wo,
-                                    "line_key": line_key,
-                                    # Add other required key/value pairs here as needed
+                                    st.session_state.req_cart.append({
+                                        "project_code": project_code, # Assuming project_code is defined elsewhere
+                                        "project_name": project_code,
+                                        "request_type": request_type, # Assuming request_type is defined elsewhere
+                                        "vendor": vendor, # Assuming vendor is defined elsewhere
+                                        "wo": wo, # Assuming wo is defined elsewhere
+                                        "line_key": str(line_key),
+                                        "uom": uom, # Assuming uom is defined elsewhere
+                                        "stage": stage or "", # Assuming stage is defined elsewhere
+                                        "description": description.strip(),  # <— your edited text
+                                        "qty": float(qty), # Assuming qty is defined elsewhere
+                                        "date_casting": str(date_cast) if date_cast else "", # Assuming date_cast is defined elsewhere
+                                        "date_testing": str(date_test) if date_test else "", # Assuming date_test is defined elsewhere
+                                        "remarks": remarks.strip(), # Assuming remarks is defined elsewhere
+                                        "remaining_at_request": float(remaining) if not np.isnan(remaining) else "", # Assuming remaining is defined elsewhere
+                                        "is_new_item": is_new_item, # Assuming is_new_item is defined elsewhere
+                                        "approval_required": approval_required, # Assuming approval_required is defined elsewhere
+                                        "approval_reason": approval_reason, # Assuming approval_reason is defined elsewhere
                                 })
                             with c1:
                                 st.markdown("**Header**")
