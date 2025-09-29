@@ -998,8 +998,9 @@ def coerce_date(s: pd.Series) -> pd.Series:
     return pd.to_datetime(s, errors="coerce", dayfirst=True, infer_datetime_format=True)
 
 def dedupe_columns(cols: List[str]) -> List[str]:
-    seen = {}; out = []
-    for c in cols:
+    seen = {}
+    out = []
+    for c in map(str, cols):
         if c in seen: seen[c]+=1; out.append(f"{c}.{seen[c]}")
         else: seen[c]=0; out.append(c)
     return out
@@ -1056,11 +1057,36 @@ PREFIX_MAPPING: Dict[str, List[str]] = {
     "CERT_": ['Cert. Qty..1','Cert. Amount.1'],
     "RMN_":  ['Cert. Qty..2','Cert. Amount.2'],
 }
-REVERSE_MAP = {c: f"{p}{c}" for p, cols in PREFIX_MAPPING.items() for c in cols}
+REVERSE_MAP = {orig: f"{pref}{orig}" for pref, group in PREFIX_MAPPING.items() for orig in group}
 
 def rename_with_prefix(df: pd.DataFrame) -> pd.DataFrame:
-    raw_cols = dedupe_columns([str(c).strip() for c in df.columns])
-    df.columns = [REVERSE_MAP.get(c, c) for c in raw_cols]
+    df = df.copy()
+    # 1) Stabilize headers (strip + dedupe)
+    raw_cols = [str(c).strip() for c in df.columns]
+    raw_cols = dedupe_columns(raw_cols)
+
+    # 2) Apply mapping where we have it; keep others as-is
+    new_cols = [REVERSE_MAP.get(c, c) for c in raw_cols]
+    df.columns = new_cols
+
+    # 3) Ensure key downstream columns exist (aliases/backfills)
+    # Guarantee OD_Description exists (many exports name it just "Description")
+    if "OD_Description" not in df.columns:
+        # try common alternates that may have slipped through
+        for alt in ["Description", "Item Description", "BOQ Item"]:
+            if alt in df.columns:
+                df["OD_Description"] = df[alt]
+                break
+        else:
+            # if nothing found, create empty so downstream doesn't break
+            df["OD_Description"] = ""
+
+    # UOM / Stage often used downstream too
+    if "OD_UOM" not in df.columns and "UOM" in df.columns:
+        df["OD_UOM"] = df["UOM"]
+    if "OD_Stage" not in df.columns and "Stage" in df.columns:
+        df["OD_Stage"] = df["Stage"]
+
     return df
 def find_qty_source(df: pd.DataFrame, canonical: str) -> str:
     """
