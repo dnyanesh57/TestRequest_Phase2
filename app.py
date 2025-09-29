@@ -850,6 +850,24 @@ def has_tab_access(tab_label: str) -> bool:
     tabs = _user_allowed_tabs()
     return True if "*" in tabs else (tab_label in tabs)
 
+# >>> ADD: caption cleaner to drop leading "Line ..." and trailing "(Rem|Qty ...)"
+import re
+
+def _clean_line_caption(caption: str) -> str:
+    if not caption:
+        return ""
+    s = str(caption).strip()
+
+    # drop leading "Line xx — " (handles em dash or hyphen)
+    s = re.sub(r'^\s*Line\s*[^—-]+[—-]\s*', '', s, flags=re.IGNORECASE)
+
+    # drop any trailing parenthetical like "(Rem: 24.00)" "(Qty: 10)" "(Rem 12)"
+    s = re.sub(r'\s*\((?:rem|qty)[^)]*\)\s*$', '', s, flags=re.IGNORECASE)
+
+    # collapse extra spaces
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
 # Renamed to _is_tab_enabled to avoid recursion with the `is_enabled` function in the global scope
 # >>> ADD: selection->form sync helper
 def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, line_key: str) -> dict:
@@ -871,15 +889,23 @@ def _prefill_from_line(items_df: pd.DataFrame, proj: str, vendor: str, wo: str, 
         return {"description":"", "uom":"", "stage":"", "remaining":float("nan"), "line_item": ""}
 
     r = sel.iloc[0]
-    # NOTE: 'line_item' is a human-facing label you’ll also store in the registry,
-    # e.g., "Line 8.0 — <OD_Description>"
-    line_caption = f"Line {str(r.get('Line_Key','')).strip()} — {str(r.get('OD_Description','')).strip()}"
+    # original caption (what your picker shows): "Line 29.0 — <desc> (Rem: 24.00)"
+    raw_caption = f"Line {str(r.get('Line_Key','')).strip()} — {str(r.get('OD_Description','')).strip()}"
+    if pd.notna(r.get("Remaining_Qty")):
+        try:
+            rem = float(r.get("Remaining_Qty"))
+            raw_caption = f"{raw_caption} (Rem: {rem:,.2f})"
+        except Exception:
+            pass
+
+    cleaned = _clean_line_caption(raw_caption)  # <- strip "Line ..." and "(Rem: ...)"
+
     return {
-        "description": str(r.get("OD_Description","")).strip(),
+        "description": cleaned,                        # <<< now same as cleaned line text
         "uom":        str(r.get("OD_UOM","")).strip(),
         "stage":      str(r.get("OD_Stage","")).strip(),
         "remaining":  float(pd.to_numeric(r.get("Remaining_Qty"), errors="coerce")),
-        "line_item":  line_caption
+        "line_item":  cleaned                          # <<< keep in sync with description
     }
 def _is_tab_enabled(tab_label: str) -> bool:
     return tab_label in st.session_state.enabled_tabs
