@@ -185,6 +185,16 @@ def build_vendor_email_html(row: dict) -> str:
     </div>
     """
 
+def build_vendor_email_subject(row: dict) -> str:
+    """
+    Subject used for vendor emails. Keep this identical to auto-approval.
+    If you already had a subject builder, replace this with your exact logic.
+    """
+    proj = row.get("project_name") or row.get("project_code") or ""
+    ref  = row.get("ref", "")
+    req_type = row.get("request_type", "")
+    # Example subject used widely; adjust if your auto-approval uses a different text:
+    return f"[SJCPL] {req_type} — {proj} — {ref}"
 def send_email_via_smtp(to_email: str, subject: str, html_body: str,
                         attachment_bytes: bytes | None, attachment_name: str | None) -> tuple[bool, str]:
     """
@@ -1617,7 +1627,8 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
         st.info("You haven't generated any requests yet.")
         return
 
-    # ---------- Quick summary tiles ----------
+        # ---------- Quick summary tiles ---------- # Removed vendor email checkbox from here
+        st.session_state["selected_refs_for_vendor_send"] = []
     total = len(mine)
     n_pend = int((mine["status"].astype(str).str.startswith("Pending")).sum())
     n_appr = int((mine["status"] == "Approved").sum())
@@ -1728,15 +1739,82 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
     st.markdown("---")
     with st.expander("📧 Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
         sendable_refs = view[view["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
+        st.session_state["selected_refs_for_vendor_send"] = sendable_refs
         if not sendable_refs:
             st.caption("No Approved / Auto Approved requests in the current list.")
         else:
             sel_refs = st.multiselect("Select Approved reference(s) to email", sendable_refs, default=[], key="myreq-email-refs")
-            if st.button("Send email to vendor", type="primary", key="myreq-email-btn"):
+            if st.button("Send Email to Vendor (same as auto-approval)", type="primary", key="myreq-email-btn"):
                 _send_vendor_emails_for_refs(sel_refs)
 
     # ---------- Reprint controls (unchanged) ----------
     render_reprint_section(st, mine, company_meta, key_prefix="myreq-reprint")
+
+def send_vendor_emails_same_as_auto(refs: list[str]):
+    """
+    Manual Send-to-Vendor that mirrors auto-approval emails:
+    - One email per reference (row)
+    - Same subject & HTML body
+    - Same single-reference PDF attachment
+    """
+    if not refs:
+        st.warning("Select at least one reference.")
+        return
+
+    try:
+        from db_adapter import read_requirements_by_refs, get_vendor_email, log_requirement_email, mark_vendor_emailed
+    except Exception as e:
+        st.error(f"DB adapter not ready: {e}")
+        return
+
+    rows = read_requirements_by_refs(refs) or []
+    rows = [r for r in rows if str(r.get("status")) in ("Approved", "Auto Approved")]
+    if not rows:
+        st.info("Selected references are not Approved / Auto Approved yet. Vendor email is disabled.")
+        return
+
+    user = st.session_state.get("user", {})
+    requester_name  = user.get("name", "User")
+    requester_email = user.get("email", "user@sjcpl.local")
+    company_meta    = st.session_state.get("company_meta", {})
+
+    emailed_refs: list[str] = []
+
+    for r in rows:
+        vendor_key = str(r.get("vendor", "")).strip()
+        v_email = None
+        try:
+            v_email = get_vendor_email(vendor_key)
+        except Exception:
+            pass
+
+        if not v_email:
+            st.warning(f"No vendor email configured for: {vendor_key or '(blank)'} — skipping {r.get('ref','')}.")
+
+            # Optionally log the attempt
+            try: log_requirement_email(r.get("ref"), vendor_key, "(missing)", "(n/a)", False, "vendor email missing")
+            except Exception: pass
+            continue
+
+        # === SAME subject/body as auto-approval ===
+        subject   = build_vendor_email_subject(r) # <<< identical subject
+        html_body = build_vendor_email_html(r) # <<< identical body
+
+        # === SAME single-ref PDF as auto-approval ===
+        pdf_bytes = build_requirement_pdf_from_rows([r], company_meta)
+        attach    = f"{(r.get('ref') or 'Requirement').replace('/','_')}.pdf"
+
+        ok, msg = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach)
+        if ok:
+            emailed_refs.append(r.get("ref"))
+            st.success(f"Sent {r.get('ref')} to {vendor_key} <{v_email}>")
+
+            try: log_requirement_email(r.get("ref"), vendor_key, v_email, subject, True, "")
+            except Exception: pass
+        else:
+            st.error(f"Failed to send {r.get('ref')} to {vendor_key} <{v_email}>: {msg or 'send failed'}")
+            try: log_requirement_email(r.get("ref"), vendor_key, v_email, subject, False, msg or "send failed")
+            except Exception: pass
 
 def _send_vendor_emails_for_refs(refs: list[str]):
     if not refs:
@@ -1777,7 +1855,7 @@ def _send_vendor_emails_for_refs(refs: list[str]):
                 st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
                 continue
 
-            subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+            subject = build_vendor_email_subject(bucket[0])
             body_rows = "".join(
                 f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                 f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -2610,7 +2688,8 @@ for i, tab_label in enumerate(visible_tabs):
                         with cc1:
                             if st.button("🗑️ Clear cart", key="rq-clear"):
                                 st.session_state.req_cart = []
-                                st.rerun()
+                                st.rerun() # Removed vendor email checkbox from here
+                                st.session_state["selected_refs_for_vendor_send"] = []
                         with cc2: # Removed vendor email checkbox from here
                             pass
                         with cc3:
@@ -2788,7 +2867,8 @@ for i, tab_label in enumerate(visible_tabs):
                     with colA:
                         do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
                     with colB:
-                        do_reject = st.button("⛔ Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
+                        do_reject = st.button("⛔ Reject", key="admin-reject-btn")
+                        st.session_state["selected_refs_for_vendor_send"] = refs_to_act
                         send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
                     with colD:
                         send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
@@ -2838,7 +2918,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
                                         continue # Skip if no email found
  
-                                    subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                    subject = build_vendor_email_subject(bucket[0])
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -2848,7 +2928,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     html_body = f"""
                                     <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
                                       <p>The following request(s) have been <b>Approved</b>:</p>
-                                      <table style="border-collapse:collapse;font-size:13px">
+                                      <table style="border-collapse:collapse;font-size:13px"> 
                                         <thead><tr style="background:#f0f0f0"><th style="padding:4px 8px;text-align:left">Ref</th><th style="padding:4px 8px;text-align:left">Item</th><th style="padding:4px 8px;text-align:left">Qty</th></tr></thead>
                                         <tbody>{body_rows}</tbody>
                                       </table>
