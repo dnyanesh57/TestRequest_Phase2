@@ -2645,6 +2645,25 @@ if "app_settings" not in st.session_state:
 _ensure_reqlog_in_state()
 _login_block()
 
+# --- cart bootstrap & helpers (added) ---
+if "req_cart" not in st.session_state:
+    st.session_state.req_cart = []  # list of dicts (one row per requested line)
+
+def upsert_cart_item(item: dict):
+    """
+    Insert or update a cart entry uniquely identified by
+    (project_code, vendor, wo, line_key).
+    """
+    key = (item["project_code"], item["vendor"], item["wo"], str(item["line_key"]))
+    for it in st.session_state.req_cart:
+        if (it["project_code"], it["vendor"], it["wo"], str(it["line_key"])) == key:
+            it.update(item)
+            return "updated"
+    st.session_state.req_cart.append(item)
+    return "inserted"
+
+
+
 # Sidebar — Upload + Display + Branding
 with st.sidebar:
     st.header("Data Source")
@@ -3025,23 +3044,73 @@ for i, tab_label in enumerate(visible_tabs):
                                 # You need to define `base_pvw` and `line_key` based on your context.
                                 # For example:
                                 line_key = line_sel # Assuming line_sel is the selected line key
-                                base_pvw = filtered[(filtered["WO_Key"]==wo_sel) & (filtered["Line_Key"]==line_sel)]
+                                base_pvw = filtered[(filtered["WO_Key"] == wo_sel) & (filtered["Line_Key"] == line_sel)]
 
-                                default_desc = str(base_pvw[base_pvw["Line_Key"] == line_key]["OD_Description"].iloc[0])
-                                # Reset the text area value when the selected line changes
-                                if st.session_state.get("_rq_last_line_key") != line_key:
-                                    st.session_state["rq-desc"] = default_desc
-                                    st.session_state["_rq_last_line_key"] = line_key
+                                # Add this at the beginning of your item_mode handling, before the if/else:
+                                # Reset description when switching modes
+                                current_mode = "Existing line item" if item_mode == "Existing line item" else "New item"
+                                if st.session_state.get("_rq_last_mode") != current_mode:
+                                    if current_mode == "Existing line item":
+                                        # When switching to existing line item, set description from selected line
+                                        if 'line_key' in locals() and line_key != "NEW":
+                                            default_desc = str(base_pvw[base_pvw["Line_Key"] == line_key]["OD_Description"].iloc[0])
+                                            st.session_state["rq-desc"] = default_desc
+                                    else:
+                                        # When switching to new item, clear the description
+                                        st.session_state["rq-desc"] = ""
+                                    st.session_state["_rq_last_mode"] = current_mode
 
-                                # Always read the live value from session_state so we use exactly what the user typed
-                                description = st.text_area(
-                                    "Description (free text allowed)",
-                                    value=st.session_state.get("rq-desc", default_desc),
-                                    height=100,
-                                    key="rq-desc",
-                                )
+                                if item_mode == "Existing line item":
+                                    line_pairs = base_pvw[["Line_Key", "OD_Description", "OD_UOM", "OD_Stage", "Remaining_Qty"]].copy()
+                                    if line_pairs.empty:
+                                        st.warning("No line items found under the selected Project/Vendor/WO.")
+                                        st.stop()
+                                    line_pairs["label"] = line_pairs.apply(lambda r: f"Line {r['Line_Key']} — {str(r['OD_Description'])[:60]}… (Rem: {r['Remaining_Qty']:.2f})", axis=1)
+                                    pick_label = st.selectbox("Select Line", line_pairs["label"].tolist(), key="rq-line-lab")
+                                    row = line_pairs[line_pairs["label"] == pick_label].iloc[0]
+                                    line_key = str(row["Line_Key"])
+                                    uom = str(row.get("OD_UOM", ""))
+                                    stage = str(row.get("OD_Stage", ""))
 
-                                found_in_cart = False
+                                    # ADD THIS TRACKING LOGIC:
+                                    # Reset description when line key changes
+                                    if st.session_state.get("_rq_last_line_key") != line_key:
+                                        default_desc = str(base_pvw[base_pvw["Line_Key"] == line_key]["OD_Description"].iloc[0])
+                                        st.session_state["rq-desc"] = default_desc
+                                        st.session_state["_rq_last_line_key"] = line_key
+
+                                    # Always read the live value from session_state so we use exactly what the user typed
+                                    description = st.text_area(
+                                        "Description (free text allowed)",
+                                        value=st.session_state.get("rq-desc", ""),
+                                        height=100,
+                                        key="rq-desc",
+                                    )
+                                    remaining = float(row.get("Remaining_Qty", 0.0))
+                                    qty = st.number_input(f"Quantity (Remaining {remaining:.2f})", min_value=0.0, value=0.0, step=1.0, key="rq-qty")
+                                    is_new_item = False
+                                    approval_required = qty > remaining
+                                    approval_reason = "low_qty" if approval_required else ""
+                                else:  # New item
+                                    line_key = "NEW"
+                                    uom_opts = sorted([u for u in items_f["OD_UOM"].dropna().astype(str).unique().tolist() if u])
+                                    stage_opts = sorted([s for s in items_f["OD_Stage"].dropna().astype(str).unique().tolist() if s])
+                                    uom = st.selectbox("UOM", [""] + uom_opts, key="rq-uom")
+                                    stage = st.selectbox("Stage (optional)", [""] + stage_opts, key="rq-stage")
+
+                                    # Use session state for description in new item mode too
+                                    description = st.text_area(
+                                        "Description (required)",
+                                        value=st.session_state.get("rq-desc", ""),
+                                        height=100,
+                                        key="rq-desc"
+                                    )
+                                    qty = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0, key="rq-qty-new")
+                                    remaining = float("nan")
+                                    is_new_item = True
+                                    approval_required = True
+                                    approval_reason = "new_item"
+                                    found_in_cart = False
                                 for item in st.session_state.req_cart:
                                     if (
                                         item["project_code"] == project_code
