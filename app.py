@@ -1614,7 +1614,34 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
             mime="application/pdf",
             key=f"{key_prefix}-dl",
         )
+    if st.session_state.get("user", {}).get("role") == "master_admin":
+        with st.sidebar.expander("⚙️ Admin Settings", expanded=False):
+            st.subheader("Enabled Tabs")
+            all_tabs = ["Overview","Group: WO → Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
+            selected_tabs = st.multiselect(
+                "Select tabs to enable for all users:",
+                options=all_tabs,
+                default=st.session_state.enabled_tabs,
+                key="admin_enabled_tabs"
+            )
+            if st.button("Save Enabled Tabs", key="save_enabled_tabs"):
+                _save_enabled_tabs(selected_tabs)
+                st.session_state.enabled_tabs = selected_tabs
+                st.success("Enabled tabs updated successfully!")
+                st.rerun()
 
+            st.subheader("Data Source Configuration")
+            data_source_options = ["github", "local_upload"]
+            current_data_source = st.session_state.app_settings.get("data_source", "github")
+            new_data_source = st.radio("Choose data source:", data_source_options, index=data_source_options.index(current_data_source), key="data_source_radio")
+
+            if new_data_source == "github":
+                st.session_state.app_settings["data_source"] = "github"
+                st.info("Using GitHub as data source.")
+                st.session_state.app_settings["github_repo"] = st.text_input("GitHub Repository (e.g., user/repo)", value=st.session_state.app_settings.get("github_repo", DEFAULT_GH_REPO), key="github_repo_input")
+                st.session_state.app_settings["github_folder"] = st.text_input("Folder within repository", value=st.session_state.app_settings.get("github_folder", DEFAULT_GH_FOLDER), key="github_folder_input")
+                # FIX: Remove or complete the unfinished line below
+                # st.session_state.app_settings["github_"]  # <-- removed incomplete line
 
 
 def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company_meta: Dict):
