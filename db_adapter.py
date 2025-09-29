@@ -7,6 +7,8 @@ from contextlib import contextmanager
 import datetime as dt
 import pandas as pd
 from sqlalchemy import create_engine, text, inspect
+from typing import Optional, List, Dict, Tuple
+import hashlib, secrets
 
 # ---- Read URL (from Streamlit secrets first, else env) ----
 try:
@@ -47,13 +49,199 @@ connect_args = {
 # Single global engine (do not create engines elsewhere)
 _engine = create_engine(DB_URL, connect_args=connect_args, pool_pre_ping=True, future=True)
 
-# --- Add these imports at the top of db_adapter.py ---
-
 @contextmanager
 def _conn():
     with _engine.begin() as c:
         yield c
 
+# -------------------- Utilities --------------------
+def _sha256_hex(s: str) -> str:
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+def _table_exists(table_name: str) -> bool:
+    with _engine.connect() as connection:
+        inspector = inspect(connection)
+        return table_name in inspector.get_table_names()
+
+# -------------------- Core tables ensure (NEW) --------------------
+def _ensure_acl_users_table():
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS acl_users (
+                  email TEXT PRIMARY KEY,
+                  name TEXT NOT NULL DEFAULT '',
+                  role TEXT NOT NULL DEFAULT 'user',
+                  sites TEXT NOT NULL DEFAULT '',
+                  tabs TEXT NOT NULL DEFAULT '',
+                  can_raise INTEGER NOT NULL DEFAULT 1,
+                  can_view_registry INTEGER NOT NULL DEFAULT 1,
+                  can_export INTEGER NOT NULL DEFAULT 1,
+                  can_email_drafts INTEGER NOT NULL DEFAULT 1,
+                  password_hash TEXT NOT NULL DEFAULT ''
+                )
+            """))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS acl_users (
+                  email TEXT PRIMARY KEY,
+                  name TEXT NOT NULL DEFAULT '',
+                  role TEXT NOT NULL DEFAULT 'user',
+                  sites TEXT NOT NULL DEFAULT '',
+                  tabs TEXT NOT NULL DEFAULT '',
+                  can_raise BOOLEAN NOT NULL DEFAULT TRUE,
+                  can_view_registry BOOLEAN NOT NULL DEFAULT TRUE,
+                  can_export BOOLEAN NOT NULL DEFAULT TRUE,
+                  can_email_drafts BOOLEAN NOT NULL DEFAULT TRUE,
+                  password_hash TEXT NOT NULL DEFAULT ''
+                )
+            """))
+
+def _ensure_enabled_tabs_table():
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS enabled_tabs (
+                  id INTEGER PRIMARY KEY,
+                  tabs TEXT NOT NULL
+                )
+            """))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS enabled_tabs (
+                  id INTEGER PRIMARY KEY,
+                  tabs TEXT NOT NULL
+                )
+            """))
+        # seed a row if empty
+        c.execute(text("""
+            INSERT INTO enabled_tabs (id, tabs)
+            SELECT 1, '[]'
+            WHERE NOT EXISTS (SELECT 1 FROM enabled_tabs WHERE id=1)
+        """))
+
+def _ensure_company_meta_table():
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS company_meta (
+                  id INTEGER PRIMARY KEY,
+                  name TEXT NOT NULL DEFAULT '',
+                  address_1 TEXT NOT NULL DEFAULT '',
+                  address_2 TEXT NOT NULL DEFAULT ''
+                )
+            """))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS company_meta (
+                  id INTEGER PRIMARY KEY,
+                  name TEXT NOT NULL DEFAULT '',
+                  address_1 TEXT NOT NULL DEFAULT '',
+                  address_2 TEXT NOT NULL DEFAULT ''
+                )
+            """))
+        # seed a row if empty
+        c.execute(text("""
+            INSERT INTO company_meta (id, name, address_1, address_2)
+            SELECT 1, 'SJ Contracts Pvt Ltd',
+                      'SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park',
+                      'Baner Road, Opp. Sadanand Hotel, Baner, Pune – 411045'
+            WHERE NOT EXISTS (SELECT 1 FROM company_meta WHERE id=1)
+        """))
+
+# -------------------- Requirements log ensure (existing + email flags) --------------------
+def _ensure_requirements_log_table():
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirements_log (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ref TEXT NOT NULL UNIQUE,
+                  hash TEXT,
+                  project_code TEXT,
+                  project_name TEXT,
+                  request_type TEXT,
+                  vendor TEXT,
+                  wo TEXT,
+                  line_key TEXT,
+                  uom TEXT,
+                  stage TEXT,
+                  description TEXT,
+                  qty REAL,
+                  date_casting TEXT,
+                  date_testing TEXT,
+                  remarks TEXT,
+                  remaining_at_request REAL,
+                  approval_required BOOLEAN,
+                  approval_reason TEXT,
+                  is_new_item BOOLEAN,
+                  generated_at TEXT,
+                  generated_by_name TEXT,
+                  generated_by_email TEXT,
+                  status TEXT,
+                  approver TEXT,
+                  approved_at TEXT,
+                  idem_key TEXT,
+                  status_detail TEXT,
+                  auto_approved_at TEXT,
+                  auto_approved_by TEXT,
+                  engine_version TEXT,
+                  snap_company_name TEXT,
+                  snap_address_1 TEXT,
+                  snap_address_2 TEXT
+                )
+            """))
+            c.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_requirements_log_ref ON requirements_log(ref)"))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirements_log (
+                  id BIGSERIAL PRIMARY KEY,
+                  ref TEXT NOT NULL UNIQUE,
+                  hash TEXT, project_code TEXT, project_name TEXT, request_type TEXT, vendor TEXT, wo TEXT,
+                  line_key TEXT, uom TEXT, stage TEXT, description TEXT, qty REAL,
+                  date_casting TEXT, date_testing TEXT, remarks TEXT, remaining_at_request REAL,
+                  approval_required BOOLEAN, approval_reason TEXT, is_new_item BOOLEAN,
+                  generated_at TIMESTAMPTZ, generated_by_name TEXT, generated_by_email TEXT,
+                  status TEXT, approver TEXT, approved_at TIMESTAMPTZ,
+                  idem_key TEXT, status_detail TEXT, auto_approved_at TIMESTAMPTZ, auto_approved_by TEXT,
+                  engine_version TEXT, snap_company_name TEXT, snap_address_1 TEXT, snap_address_2 TEXT
+                )
+            """))
+    # also ensure email-flag columns
+    ensure_reqlog_email_columns()
+
+# --- Ensure emailed_* columns exist on requirements_log (UPDATED to support both names) ---
+def ensure_reqlog_email_columns() -> None:
+    """
+    Adds BOTH legacy (vendor_emailed_*) and current (emailed_vendor_*) columns,
+    and also requester equivalents. Safe/idempotent.
+    """
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            for col in [
+                "emailed_vendor_at TEXT", "emailed_vendor_by TEXT",
+                "vendor_emailed_at TEXT", "vendor_emailed_by TEXT",
+                "emailed_requester_at TEXT", "emailed_requester_by TEXT",
+                "requester_emailed_at TEXT", "requester_emailed_by TEXT",
+            ]:
+                try:
+                    c.execute(text(f"ALTER TABLE requirements_log ADD COLUMN {col}"))
+                except Exception:
+                    pass
+        else:
+            for col, dtype in [
+                ("emailed_vendor_at", "TIMESTAMPTZ"),
+                ("emailed_vendor_by", "TEXT"),
+                ("vendor_emailed_at", "TIMESTAMPTZ"),
+                ("vendor_emailed_by", "TEXT"),
+                ("emailed_requester_at", "TIMESTAMPTZ"),
+                ("emailed_requester_by", "TEXT"),
+                ("requester_emailed_at", "TIMESTAMPTZ"),
+                ("requester_emailed_by", "TEXT"),
+            ]:
+                c.execute(text(f"ALTER TABLE requirements_log ADD COLUMN IF NOT EXISTS {col} {dtype}"))
+
+# -------------------- Vendor email directory & logs (yours) --------------------
 def ensure_vendor_email_tables() -> None:
     """Create vendor_contacts + requirement_mail_log if they don't exist."""
     with _conn() as c:
@@ -108,12 +296,14 @@ def ensure_vendor_email_tables() -> None:
 
 def read_vendor_contacts() -> pd.DataFrame:
     """Return DataFrame with columns ['vendor','email'] (vendor is Subcontractor_Key)."""
+    ensure_vendor_email_tables()
     with _conn() as c:
         rows = c.execute(text("SELECT vendor_key AS vendor, email FROM vendor_contacts ORDER BY vendor_key")).mappings().all()
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["vendor", "email"])
 
 def upsert_vendor_contact(vendor: str, email: str, by_email: str | None = None) -> None:
     """UPSERT a vendor's email (DB-only)."""
+    ensure_vendor_email_tables()
     vendor = (vendor or "").strip()
     email = (email or "").strip()
     if not vendor or not email:
@@ -140,12 +330,14 @@ def upsert_vendor_contact(vendor: str, email: str, by_email: str | None = None) 
 
 def get_vendor_email(vendor: str) -> str | None:
     """Convenience lookup for a single vendor email."""
+    ensure_vendor_email_tables()
     with _conn() as c:
         r = c.execute(text("SELECT email FROM vendor_contacts WHERE vendor_key = :v"), {"v": vendor}).scalar()
         return r if r else None
 
 def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: bool, error: str | None = None) -> None:
     """Audit log for outgoing requirement emails."""
+    ensure_vendor_email_tables()
     with _conn() as c:
         if DB_URL.startswith("sqlite"):
             c.execute(text("""
@@ -158,51 +350,7 @@ def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: b
                 VALUES (:ref, :vendor, :email, :subject, :ok, :error)
             """), {"ref": ref, "vendor": vendor, "email": email, "subject": subject, "ok": ok, "error": error})
 
-def update_requirement_status(refs: list[str], status: str, approver_email: str,
-                              status_detail: str | None = None, approved_at_iso: str | None = None):
-    """
-    Update requirement status fields for a list of refs.
-    Allowed statuses: 'Approved', 'Rejected', 'Pending Admin Approval', 'Auto Approved'
-    """
-    if not refs: return
-    if approved_at_iso is None:
-        approved_at_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-    with _conn() as c:
-        # Update only the fields we need; 'approved_at' on rejection can be blank if you prefer
-        q = text("""
-            UPDATE requirements_log
-               SET status = :st,
-                   approver = :appr,
-                   approved_at = CASE WHEN :st = 'Approved' THEN :dt ELSE '' END,
-                   status_detail = COALESCE(:det, status_detail)
-             WHERE ref = ANY(:refs)
-        """)
-        # For SQLite fallback, ANY(..) is unsupported — use simple IN
-        if DB_URL.startswith("sqlite"):
-            q = text("""
-                UPDATE requirements_log
-                   SET status = :st,
-                       approver = :appr,
-                       approved_at = CASE WHEN :st = 'Approved' THEN :dt ELSE '' END,
-                       status_detail = COALESCE(:det, status_detail)
-                 WHERE ref IN (%s)
-            """ % ",".join("?"*len(refs)))
-            c.execute(q, [status, approver_email, approved_at_iso, status_detail] + refs)
-        else:
-            c.execute(q, {"st": status, "appr": approver_email, "dt": approved_at_iso, "det": status_detail, "refs": refs})
-
-def read_requirements_by_refs(refs: list[str]) -> list[dict]:
-    if not refs: return []
-    with _conn() as c:
-        if DB_URL.startswith("sqlite"):
-            q = text("SELECT * FROM requirements_log WHERE ref IN (%s)" % ",".join("?"*len(refs)))
-            rows = c.execute(q, refs).mappings().all()
-        else:
-            q = text("SELECT * FROM requirements_log WHERE ref = ANY(:refs)")
-            rows = c.execute(q, {"refs": refs}).mappings().all()
-        return [dict(r) for r in rows]
-# -------------------- Existing API (unchanged logic) --------------------
-
+# -------------------- Requirements ops (existing) --------------------
 def df_read(sql: str, params: dict | None = None) -> pd.DataFrame: # type: ignore
     _ensure_requirements_log_table() # Ensure table exists before reading
     with _engine.begin() as cx:
@@ -261,7 +409,7 @@ def write_app_settings(use_github: bool, repo: str, branch: str, folder: str) ->
               github_folder = excluded.github_folder
         """), dict(use_github=bool(use_github), repo=repo, branch=branch, folder=folder))
 
-
+# --- Upsert requirements (kept) ---
 def upsert_requirements(rows: list[dict]) -> None:
     _ensure_requirements_log_table() # Ensure table exists before upserting
     if not rows: return
@@ -283,97 +431,29 @@ def upsert_requirements(rows: list[dict]) -> None:
     with _engine.begin() as cx:
         for r in rows:
             cx.execute(sql, r)
-def _table_exists(table_name: str) -> bool:
-    """
-    Checks if a table exists in the database.
-    """
-    with _engine.connect() as connection:
-        inspector = inspect(connection)
-        return table_name in inspector.get_table_names()
 
-def _ensure_requirements_log_table():
-    """
-    Ensures the requirements_log table exists with a UNIQUE constraint on 'ref'.
-    """
-    with _conn() as c:
-        if DB_URL.startswith("sqlite"):
-            c.execute(text("""
-                CREATE TABLE IF NOT EXISTS requirements_log (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  ref TEXT NOT NULL UNIQUE,
-                  hash TEXT,
-                  project_code TEXT,
-                  project_name TEXT,
-                  request_type TEXT,
-                  vendor TEXT,
-                  wo TEXT,
-                  line_key TEXT,
-                  uom TEXT,
-                  stage TEXT,
-                  description TEXT,
-                  qty REAL,
-                  date_casting TEXT,
-                  date_testing TEXT,
-                  remarks TEXT,
-                  remaining_at_request REAL,
-                  approval_required BOOLEAN,
-                  approval_reason TEXT,
-                  is_new_item BOOLEAN,
-                  generated_at TEXT,
-                  generated_by_name TEXT,
-                  generated_by_email TEXT,
-                  status TEXT,
-                  approver TEXT,
-                  approved_at TEXT,
-                  idem_key TEXT,
-                  status_detail TEXT,
-                  auto_approved_at TEXT,
-                  auto_approved_by TEXT,
-                  engine_version TEXT,
-                  snap_company_name TEXT,
-                  snap_address_1 TEXT,
-                  snap_address_2 TEXT
-                )
-            """))
-            # Ensure unique index for 'ref' in SQLite if not already created inline
-            c.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS idx_requirements_log_ref ON requirements_log(ref)"))
-        else:
-            c.execute(text("""
-                CREATE TABLE IF NOT EXISTS requirements_log (
-                  id BIGSERIAL PRIMARY KEY,
-                  ref TEXT NOT NULL UNIQUE,
-                  hash TEXT, project_code TEXT, project_name TEXT, request_type TEXT, vendor TEXT, wo TEXT,
-                  line_key TEXT, uom TEXT, stage TEXT, description TEXT, qty REAL,
-                  date_casting TEXT, date_testing TEXT, remarks TEXT, remaining_at_request REAL,
-                  approval_required BOOLEAN, approval_reason TEXT, is_new_item BOOLEAN,
-                  generated_at TIMESTAMPTZ, generated_by_name TEXT, generated_by_email TEXT,
-                  status TEXT, approver TEXT, approved_at TIMESTAMPTZ,
-                  idem_key TEXT, status_detail TEXT, auto_approved_at TIMESTAMPTZ, auto_approved_by TEXT,
-                  engine_version TEXT, snap_company_name TEXT, snap_address_1 TEXT, snap_address_2 TEXT
-                )
-            """))
-
-
-
-
+# -------------------- ACL (ensure + read/write) --------------------
 def read_acl_df() -> pd.DataFrame:
+    _ensure_acl_users_table()
     return df_read("select * from acl_users")
 
 def write_acl_df(df: pd.DataFrame):
+    _ensure_acl_users_table()
     with _engine.begin() as cx:
         cx.execute(text("delete from acl_users"))
     df_write_replace("acl_users", df, index=False)
 
+# -------------------- Approval recipients (your schema) --------------------
 def ensure_approval_recipient_tables() -> None:
     """Create approval_recipients table if it doesn't exist."""
-    with _conn() as c: # type: ignore
+    with _conn() as c:
         if DB_URL.startswith("sqlite"):
             c.execute(text("""
                 CREATE TABLE IF NOT EXISTS approval_recipients (
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  project_code TEXT NOT NULL,
-                  vendor_key TEXT NOT NULL,
-                  request_type TEXT NOT NULL,
+                  project_code TEXT,
+                  vendor_key TEXT,
+                  request_type TEXT,
                   email TEXT NOT NULL,
                   created_at TEXT NOT NULL DEFAULT (datetime('now')), 
                   updated_at TEXT NOT NULL DEFAULT (datetime('now')), 
@@ -386,9 +466,9 @@ def ensure_approval_recipient_tables() -> None:
             c.execute(text("""
                 CREATE TABLE IF NOT EXISTS approval_recipients (
                   id BIGSERIAL PRIMARY KEY,
-                  project_code TEXT NOT NULL,
-                  vendor_key TEXT NOT NULL,
-                  request_type TEXT NOT NULL,
+                  project_code TEXT,
+                  vendor_key TEXT,
+                  request_type TEXT,
                   email TEXT NOT NULL,
                   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), 
                   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), 
@@ -400,17 +480,19 @@ def ensure_approval_recipient_tables() -> None:
 
 def read_approval_recipients() -> pd.DataFrame:
     """Return DataFrame with approval recipients."""
+    ensure_approval_recipient_tables()
     with _conn() as c:
-        rows = c.execute(text("SELECT * FROM approval_recipients ORDER BY project_code, vendor_key, request_type, email")).mappings().all()
+        rows = c.execute(text("SELECT * FROM approval_recipients ORDER BY project_code NULLS FIRST, vendor_key NULLS FIRST, request_type NULLS FIRST, email")).mappings().all()
         return pd.DataFrame(rows) if rows else pd.DataFrame(columns=["id", "project_code", "vendor_key", "request_type", "email", "created_at", "created_by"])
-        
+
 def upsert_approval_recipient(project_code: str|None, vendor_key: str|None, \
                               request_type: str|None, email: str, \
                               by_email: str|None=None, rec_id: int|None=None) -> None:
     """
     Insert/update an approval recipient. If rec_id is provided -> update; else insert new.
     """
-    with _conn() as c: # type: ignore
+    ensure_approval_recipient_tables()
+    with _conn() as c:
         if rec_id:
             if DB_URL.startswith("sqlite"):
                 c.execute(text("""
@@ -431,21 +513,25 @@ def upsert_approval_recipient(project_code: str|None, vendor_key: str|None, \
                 c.execute(text("""
                     INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by, updated_by)
                     VALUES (:pc, :vk, :rt, :em, :by, :by)
+                    ON CONFLICT(project_code, vendor_key, request_type, email) DO NOTHING
                 """), {"pc":project_code, "vk":vendor_key, "rt":request_type, "em":email, "by":by_email})
             else:
                 c.execute(text("""
                     INSERT INTO approval_recipients(project_code, vendor_key, request_type, email, created_by, updated_by)
                     VALUES (:pc, :vk, :rt, :em, :by, :by)
+                    ON CONFLICT (project_code, vendor_key, request_type, email) DO NOTHING
                 """), {"pc":project_code, "vk":vendor_key, "rt":request_type, "em":email, "by":by_email})
 
 def delete_approval_recipient(rec_id: int) -> None:
     """Delete an approval recipient by ID."""
-    with _conn() as c: # type: ignore
+    ensure_approval_recipient_tables()
+    with _conn() as c:
         c.execute(text("DELETE FROM approval_recipients WHERE id=:id"), {"id": rec_id})
 
 def list_approver_emails(project_code: str|None, vendor_key: str|None, request_type: str|None) -> list[str]:
     """List emails of approvers for a given project, vendor, and request type."""
-    with _conn() as c: # type: ignore
+    ensure_approval_recipient_tables()
+    with _conn() as c:
         q = text("""
             SELECT DISTINCT email, 3 as prio FROM approval_recipients 
               WHERE (project_code = :pc) AND (vendor_key = :vk) AND (request_type = :rt)
@@ -479,71 +565,126 @@ def list_approver_emails(project_code: str|None, vendor_key: str|None, request_t
                 seen.add(em); out.append(em)
         return out
 
-# --- Ensure emailed_* columns exist on requirements_log ---
-def ensure_reqlog_email_columns() -> None:
+# -------------------- Requirement status ops (yours) --------------------
+def update_requirement_status(refs: list[str], status: str, approver_email: str,
+                              status_detail: str | None = None, approved_at_iso: str | None = None):
     """
-    Adds emailed_vendor_at, emailed_vendor_by columns to requirements_log if missing.
-    Works for Postgres and SQLite.
+    Update requirement status fields for a list of refs.
+    Allowed statuses: 'Approved', 'Rejected', 'Pending Admin Approval', 'Auto Approved'
     """
+    if not refs: return
+    _ensure_requirements_log_table()
+    if approved_at_iso is None:
+        approved_at_iso = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    with _conn() as c:
+        # Update only the fields we need; 'approved_at' on rejection can be blank if you prefer
+        q = text("""
+            UPDATE requirements_log
+               SET status = :st,
+                   approver = :appr,
+                   approved_at = CASE WHEN :st = 'Approved' THEN :dt ELSE '' END,
+                   status_detail = COALESCE(:det, status_detail)
+             WHERE ref = ANY(:refs)
+        """)
+        if DB_URL.startswith("sqlite"):
+            q = text("""
+                UPDATE requirements_log
+                   SET status = ?,
+                       approver = ?,
+                       approved_at = CASE WHEN ? = 'Approved' THEN ? ELSE '' END,
+                       status_detail = COALESCE(?, status_detail)
+                 WHERE ref IN (%s)
+            """ % ",".join("?"*len(refs)))
+            c.execute(q, [status, approver_email, status, approved_at_iso, status_detail] + refs)
+        else:
+            c.execute(q, {"st": status, "appr": approver_email, "dt": approved_at_iso, "det": status_detail, "refs": refs})
+
+def read_requirements_by_refs(refs: list[str]) -> list[dict]:
+    if not refs: return []
+    _ensure_requirements_log_table()
     with _conn() as c:
         if DB_URL.startswith("sqlite"):
-            # Try creating columns; SQLite doesn't support IF NOT EXISTS for columns—wrap in try/except.
-            try:
-                c.execute(text("ALTER TABLE requirements_log ADD COLUMN emailed_vendor_at TEXT"))
-            except Exception:
-                pass
-            try:
-                c.execute(text("ALTER TABLE requirements_log ADD COLUMN emailed_vendor_by TEXT"))
-            except Exception:
-                pass
+            q = text("SELECT * FROM requirements_log WHERE ref IN (%s)" % ",".join("?"*len(refs)))
+            rows = c.execute(q, refs).mappings().all()
         else:
-            c.execute(text("""
-                ALTER TABLE requirements_log
-                ADD COLUMN IF NOT EXISTS emailed_vendor_at TIMESTAMPTZ
-            """))
-            c.execute(text("""
-                ALTER TABLE requirements_log
-                ADD COLUMN IF NOT EXISTS emailed_vendor_by TEXT
-            """))
+            q = text("SELECT * FROM requirements_log WHERE ref = ANY(:refs)")
+            rows = c.execute(q, {"refs": refs}).mappings().all()
+        return [dict(r) for r in rows]
 
+# -------------------- Email sent flags (NEW) --------------------
 def mark_vendor_emailed(refs: list[str], by_email: str) -> None:
     """
-    Set emailed_vendor_at (now) and emailed_vendor_by for the given refs.
+    Set vendor emailed flags (compatible names).
     """
     if not refs:
         return
-
+    _ensure_requirements_log_table()
     ensure_reqlog_email_columns()
-
     with _conn() as c:
         if DB_URL.startswith("sqlite"):
-            # Build a dynamic IN (?, ?, ?)
             placeholders = ",".join("?" * len(refs))
             q = text(f"""
                 UPDATE requirements_log
                    SET emailed_vendor_at = datetime('now'),
-                       emailed_vendor_by = ?
+                       emailed_vendor_by = ?,
+                       vendor_emailed_at = datetime('now'),
+                       vendor_emailed_by = ?
                  WHERE ref IN ({placeholders})
             """)
-            c.execute(q, [by_email] + refs)
+            c.execute(q, [by_email, by_email] + refs)
         else:
             q = text("""
                 UPDATE requirements_log
                    SET emailed_vendor_at = NOW(),
-                       emailed_vendor_by = :by
+                       emailed_vendor_by = :by,
+                       vendor_emailed_at = NOW(),
+                       vendor_emailed_by = :by
                  WHERE ref = ANY(:refs)
             """)
             c.execute(q, {"by": by_email, "refs": refs})
 
+def mark_requester_emailed(refs: list[str], by_email: str) -> None:
+    """
+    Set requester emailed flags (compatible names).
+    """
+    if not refs:
+        return
+    _ensure_requirements_log_table()
+    ensure_reqlog_email_columns()
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            placeholders = ",".join("?" * len(refs))
+            q = text(f"""
+                UPDATE requirements_log
+                   SET emailed_requester_at = datetime('now'),
+                       emailed_requester_by = ?,
+                       requester_emailed_at = datetime('now'),
+                       requester_emailed_by = ?
+                 WHERE ref IN ({placeholders})
+            """)
+            c.execute(q, [by_email, by_email] + refs)
+        else:
+            q = text("""
+                UPDATE requirements_log
+                   SET emailed_requester_at = NOW(),
+                       emailed_requester_by = :by,
+                       requester_emailed_at = NOW(),
+                       requester_emailed_by = :by
+                 WHERE ref = ANY(:refs)
+            """)
+            c.execute(q, {"by": by_email, "refs": refs})
+
+# -------------------- Reqlog / tabs / company meta (yours + ensure) --------------------
 def read_reqlog_df() -> pd.DataFrame:
-    _ensure_requirements_log_table() # Ensure table exists before reading
+    _ensure_requirements_log_table()
     return df_read("select * from requirements_log order by generated_at desc")
 
 def write_reqlog_df(df: pd.DataFrame):
+    _ensure_requirements_log_table()
     df_write_replace("requirements_log", df, index=False)
 
-
 def read_enabled_tabs() -> list[str]:
+    _ensure_enabled_tabs_table()
     df = df_read("select tabs from enabled_tabs where id=1")
     if df.empty: return []
     try:
@@ -552,6 +693,7 @@ def read_enabled_tabs() -> list[str]:
         return []
 
 def write_enabled_tabs(tabs: list[str]):
+    _ensure_enabled_tabs_table()
     s = json.dumps(tabs)
     with _engine.begin() as cx:
         cx.execute(text("""
@@ -560,15 +702,151 @@ def write_enabled_tabs(tabs: list[str]):
         """), {"s": s})
 
 def read_company_meta() -> dict:
+    _ensure_company_meta_table()
     df = df_read("select * from company_meta where id=1")
     if df.empty: return {}
     r = df.iloc[0].to_dict()
     return {"name": r.get("name"), "address_lines": [r.get("address_1",""), r.get("address_2","")]}
 
 def write_company_meta(name: str, a1: str, a2: str):
+    _ensure_company_meta_table()
     with _engine.begin() as cx:
         cx.execute(text("""
             insert into company_meta (id, name, address_1, address_2)
             values (1, :n, :a1, :a2)
             on conflict (id) do update set name=:n, address_1=:a1, address_2=:a2
         """), {"n": name, "a1": a1, "a2": a2})
+
+# -------------------- Password: change & reset (NEW) --------------------
+def _ensure_password_resets_table():
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS password_resets (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT NOT NULL,
+                  token TEXT NOT NULL UNIQUE,
+                  expires_at TEXT NOT NULL,
+                  used_at TEXT,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email)"))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS password_resets (
+                  id BIGSERIAL PRIMARY KEY,
+                  email TEXT NOT NULL,
+                  token TEXT NOT NULL UNIQUE,
+                  expires_at TIMESTAMPTZ NOT NULL,
+                  used_at TIMESTAMPTZ,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_password_resets_email ON password_resets(email)"))
+
+def change_password(email: str, old_password: str, new_password: str) -> Tuple[bool, str]:
+    _ensure_acl_users_table()
+    with _conn() as c:
+        row = c.execute(text("SELECT password_hash FROM acl_users WHERE lower(email)=lower(:em)"),
+                        {"em": email}).fetchone()
+        if not row:
+            return False, "User not found."
+        if _sha256_hex(old_password) != (row[0] or ""):
+            return False, "Current password is incorrect."
+        ph = _sha256_hex(new_password)
+        c.execute(text("UPDATE acl_users SET password_hash=:ph WHERE lower(email)=lower(:em)"),
+                  {"ph": ph, "em": email})
+    return True, "Password updated."
+
+def set_user_password(email: str, new_password: str) -> bool:
+    _ensure_acl_users_table()
+    ph = _sha256_hex(new_password)
+    with _conn() as c:
+        res = c.execute(text("UPDATE acl_users SET password_hash=:ph WHERE lower(email)=lower(:em)"),
+                        {"ph": ph, "em": email})
+        return (res.rowcount or 0) > 0
+
+def _utcnow() -> dt.datetime:
+    # Use timezone-aware for Postgres, string for SQLite is okay
+    return dt.datetime.utcnow()
+
+def start_password_reset(email: str, ttl_minutes: int = 30) -> Tuple[bool, str, Optional[str], Optional[dt.datetime]]:
+    _ensure_acl_users_table()
+    _ensure_password_resets_table()
+    token = secrets.token_urlsafe(24)
+    expires = _utcnow() + dt.timedelta(minutes=ttl_minutes)
+    with _conn() as c:
+        user_row = c.execute(text("SELECT 1 FROM acl_users WHERE lower(email)=lower(:em)"), {"em": email}).fetchone()
+        if not user_row:
+            return False, "User not found.", None, None
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("INSERT INTO password_resets (email, token, expires_at) VALUES (lower(:em), :tok, :exp)"),
+                      {"em": email, "tok": token, "exp": expires.isoformat(timespec="seconds")})
+        else:
+            c.execute(text("INSERT INTO password_resets (email, token, expires_at) VALUES (lower(:em), :tok, :exp)"),
+                      {"em": email, "tok": token, "exp": expires})
+    return True, "Reset link generated.", token, expires
+
+def verify_reset_token(token: str) -> Optional[str]:
+    _ensure_password_resets_table()
+    with _conn() as c:
+        row = c.execute(text("SELECT email, expires_at, used_at FROM password_resets WHERE token=:tok"),
+                        {"tok": token}).fetchone()
+        if not row:
+            return None
+        email, exp, used = row
+        # Normalize exp to datetime
+        if isinstance(exp, str):
+            try: exp_dt = dt.datetime.fromisoformat(exp)
+            except Exception: return None
+        else:
+            exp_dt = exp
+        if used is not None:
+            return None
+        if exp_dt is None or _utcnow() > exp_dt:
+            return None
+        return email
+
+def complete_password_reset(token: str, new_password: str) -> Tuple[bool, str, Optional[str]]:
+    email = verify_reset_token(token)
+    if not email:
+        return False, "Reset link is invalid or expired.", None
+    _ensure_acl_users_table()
+    _ensure_password_resets_table()
+    ph = _sha256_hex(new_password)
+    now = _utcnow()
+    with _conn() as c:
+        c.execute(text("UPDATE acl_users SET password_hash=:ph WHERE lower(email)=lower(:em)"),
+                  {"ph": ph, "em": email})
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("UPDATE password_resets SET used_at=:now WHERE token=:tok"),
+                      {"now": now.isoformat(timespec='seconds'), "tok": token})
+        else:
+            c.execute(text("UPDATE password_resets SET used_at=:now WHERE token=:tok"),
+                      {"now": now, "tok": token})
+    return True, "Password has been reset.", email
+
+def cleanup_expired_password_resets(retain_days: int = 30) -> int:
+    _ensure_password_resets_table()
+    cutoff = _utcnow() - dt.timedelta(days=retain_days)
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            res = c.execute(
+                text("""
+                  DELETE FROM password_resets
+                  WHERE ( (strftime('%s', expires_at) < strftime('%s', 'now')) OR used_at IS NOT NULL )
+                    AND (strftime('%s', created_at) < strftime('%s', :cut))
+                """),
+                {"cut": cutoff.isoformat(timespec="seconds")}
+            )
+        else:
+            res = c.execute(
+                text("""
+                  DELETE FROM password_resets
+                  WHERE (expires_at < NOW() OR used_at IS NOT NULL)
+                    AND created_at < :cutoff
+                """),
+                {"cutoff": cutoff}
+            )
+        return res.rowcount or 0

@@ -72,6 +72,51 @@ div.stButton>button, .stDownloadButton>button {
 </style>
 """, unsafe_allow_html=True)
 
+# Token landing page
+query_params = st.experimental_get_query_params()
+reset_tok = (query_params.get("reset_token") or [None])[0]
+
+if reset_tok:
+    st.title("Reset Password")
+    new1 = st.text_input("New password", type="password", key="rp-new1")
+    new2 = st.text_input("Confirm new password", type="password", key="rp-new2")
+    if st.button("Set New Password", key="rp-btn"):
+        if not new1 or not new2:
+            st.error("Please fill both fields.")
+        elif new1 != new2:
+            st.error("Passwords do not match.")
+        else:
+            try:
+                from db_adapter import complete_password_reset
+                ok, msg, email = complete_password_reset(reset_tok, new1)
+                if ok:
+                    st.success("Password reset successful. Please log in with your new password.")
+                    # Clear the token from URL
+                    st.experimental_set_query_params()
+                else:
+                    st.error(msg)
+            except Exception as e:
+                st.error(f"Error resetting password: {e}")
+    st.stop()  # Show only this page while handling reset
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
+html, body, [class*="css"]  { font-family: 'Roboto', sans-serif; }
+.big-title { font-size: 32px; font-weight: 800; margin: 0 0 0.2rem 0;
+  background: linear-gradient(90deg, #00AEDA 0%, #000000 50%, #939598 100%);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.subtle { color: #4d4d4d; margin-top: -8px; }
+hr.brand { border: none; height: 4px; background: linear-gradient(90deg,#00AEDA,#939598); border-radius: 2px; }
+div.stButton>button, .stDownloadButton>button {
+  border-radius: 10px; padding: 0.5rem 1rem; font-weight: 600; border: 1px solid #00AEDA33;
+}
+.lowpill { display:inline-block; padding:2px 8px; border-radius:999px; background:#ffe5e5; color:#c40000; font-weight:600; font-size:12px; }
+.codebox { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background:#f6f8fa; border:1px solid #e1e4e8; border-radius:8px; padding:10px; white-space:pre-wrap; }
+</style>
+""", unsafe_allow_html=True)
+
 
 
 DEFAULT_GH_REPO   = "dnyanesh57/TestRequest_Phase2"  # <--- your repo
@@ -648,6 +693,38 @@ def _login_block():
                 st.rerun()
             else:
                 st.error("Invalid credentials")
+        st.markdown("---")
+        st.markdown("**Forgot your password?**")
+        fp_email = st.text_input("Your email", key="fp-email")
+        if st.button("Send Reset Link", key="fp-send"):
+            if not fp_email:
+                st.error("Enter your email.")
+            else:
+                try:
+                    from db_adapter import start_password_reset
+                    ok, msg, token, exp = start_password_reset(fp_email, ttl_minutes=30)
+                    if ok and token:
+                        base_url = st.secrets.get("app_base_url", "") or ""
+                        reset_link = f"{base_url}?reset_token={token}" if base_url else f"?reset_token={token}"
+
+                        html = f"""
+                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                          <p>We received a request to reset your password.</p>
+                          <p><a href="{reset_link}">Click here to reset your password</a></p>
+                          <p>If you didn't request this, you can ignore this email.</p>
+                          <p>This link expires at <b>{exp}</b> (UTC).</p>
+                        </div>
+                        """
+                        subject = "SJCPL — Password Reset"
+                        okm, emsg = send_email_via_smtp(fp_email, subject, html, None, None)
+                        if okm:
+                            st.success("Reset link sent to your email.")
+                        else:
+                            st.error(f"Failed to send email: {emsg}")
+                    else:
+                        st.error(msg)
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
     if "user" not in st.session_state:
         st.warning("Please sign in to use the app.")
@@ -2095,6 +2172,29 @@ if _user_is_master_admin():
         st.caption("If the repo is private or you hit rate-limits, add [github].token to secrets.")
         
 
+with st.sidebar.expander("🔑 Change Password", expanded=False):
+    if "user" in st.session_state:
+        cur = st.text_input("Current password", type="password", key="cp-cur")
+        new1 = st.text_input("New password", type="password", key="cp-new1")
+        new2 = st.text_input("Confirm new password", type="password", key="cp-new2")
+        if st.button("Update Password", key="cp-btn"):
+            if not cur or not new1 or not new2:
+                st.error("Please fill all fields.")
+            elif new1 != new2:
+                st.error("New passwords do not match.")
+            else:
+                try:
+                    from db_adapter import change_password
+                    ok, msg = change_password(st.session_state.user["email"], cur, new1)
+                    if ok:
+                        st.success(msg)
+                    else:
+                        st.error(msg)
+                except Exception as e:
+                    st.error(f"Error updating password: {e}")
+    else:
+        st.caption("Sign in to change your password.")
+
 
 if S["data_source"] == "github":
     c1, c2 = st.columns([1,1])
@@ -2848,6 +2948,45 @@ for i, tab_label in enumerate(visible_tabs):
                         save_cb=lambda dfu: (write_reqlog_df(dfu), setattr(st.session_state, "reqlog_df", dfu)))
 
                     st.markdown("### Approval Actions")
+                    with st.expander("🔧 Password Admin", expanded=False):
+                        em = st.text_input("User email", key="padm-email")
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("Send reset link email", key="padm-reset"):
+                                try:
+                                    from db_adapter import start_password_reset
+                                    ok, msg, token, exp = start_password_reset(em, ttl_minutes=30)
+                                    if ok and token:
+                                        base_url = st.secrets.get("app_base_url", "") or ""
+                                        reset_link = f"{base_url}?reset_token={token}" if base_url else f"?reset_token={token}"
+                                        html = f"""
+                                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                                          <p>A password reset was requested by admin.</p>
+                                          <p><a href="{reset_link}">Click here to reset your password</a></p>
+                                          <p>This link expires at <b>{exp}</b> (UTC).</p>
+                                        </div>
+                                        """
+                                        subject = "SJCPL — Password Reset"
+                                        okm, emsg = send_email_via_smtp(em, subject, html, None, None)
+                                        st.success("Reset email sent." if okm else f"Email send failed: {emsg}")
+                                    else:
+                                        st.error(msg)
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+                        with c2:
+                            newp = st.text_input("Set password (direct)", type="password", key="padm-setp")
+                            if st.button("Set password now", key="padm-setp-btn"):
+                                try:
+                                    from db_adapter import set_user_password
+                                    if not newp:
+                                        st.error("Enter a new password.")
+                                    else:
+                                        ok = set_user_password(em, newp)
+                                        st.success("Password set.") if ok else st.error("User not found.")
+                                except Exception as e:
+                                    st.error(f"Error: {e}")
+
+
                     # Focus on items needing approval by default
                     df_admin = df.copy()
                     # Filter for pending items only
