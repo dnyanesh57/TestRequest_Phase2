@@ -798,12 +798,12 @@ def has_tab_access(tab_label: str) -> bool:
     tabs = _user_allowed_tabs()
     return True if "*" in tabs else (tab_label in tabs)
 
-def is_enabled(tab_label: str) -> bool:
-    ok = is_enabled(tab_label) and has_tab_access(tab_label)
-    if not ok:
-        st.warning(f"You do not have access to the '{tab_label}' tab, or it has been disabled by an administrator.")
-    return ok
+# Renamed to _is_tab_enabled to avoid recursion with the `is_enabled` function in the global scope
+def _is_tab_enabled(tab_label: str) -> bool:
+    return tab_label in st.session_state.enabled_tabs
 
+def can_view(tab_label: str) -> bool:
+    return _is_tab_enabled(tab_label) and has_tab_access(tab_label)
 # ----- Handle deep-links BEFORE login gate -----
 # Streamlit has two APIs depending on version; try both:
 try:
@@ -1267,13 +1267,6 @@ def _styles():
         leading=14,
         spaceAfter=0,
     ))
-    return tab_label in st.session_state.enabled_tabs
-
-def can_view(tab_label: str) -> bool:
-    ok = is_enabled(tab_label) and has_tab_access(tab_label)
-    if not ok:
-        st.warning(f"You do not have access to the '{tab_label}' tab, or it has been disabled by an administrator.")
-    return ok
 
 # ----------------------------- Helpers (Phase-1) -----------------------------
 def coerce_number(s: pd.Series) -> pd.Series:
@@ -2764,7 +2757,7 @@ all_tab_names = [
     "Subcontractor Summary", "Browse", "Status as on Date", "Export", "Email Drafts", "Diagnostics",
     "Raise Requirement", "My Requests", "Requirements Registry", "Admin"
 ]
-visible_tabs = [t for t in all_tab_names if is_enabled(t) and has_tab_access(t)]
+visible_tabs = [t for t in all_tab_names if _is_tab_enabled(t) and has_tab_access(t)]
 tabs = st.tabs(visible_tabs)
 
 def render_grouped_lines(
