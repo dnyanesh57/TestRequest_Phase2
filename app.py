@@ -53,7 +53,7 @@ PLOTLY_COLORS = [BRAND_BLUE, BRAND_BLACK, BRAND_GREY, "#146C94", "#4A4A4A"]
 st.set_page_config(page_title=APP_TITLE, page_icon="ðŸ“‘", layout="wide")
 pd.options.mode.copy_on_write = True
 px.defaults.template = "plotly_white"; px.defaults.color_discrete_sequence = PLOTLY_COLORS
-
+# Replace all occurrences of "ðŸ“‘" with "📊"
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
@@ -88,7 +88,7 @@ if not GITHUB_TOKEN:
 def brand_header():
     st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="brand" />', unsafe_allow_html=True)
+    st.markdown('<hr class="brand" />', unsafe_allow_html=True) # Replace all occurrences of "ðŸ“‘" with "📊"
 
 
 # Ensure vendor email & mail-log tables exist
@@ -201,7 +201,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
     # Gmail sanity check (common source of â€˜connection closedâ€™ during auth)
     if "gmail.com" in (cfg["host"] or "").lower():
         # App Password (not account password) is required if 2FA is on, and FROM must match USER.
-        if cfg["from_email"].lower() != cfg["user"].lower():
+        if cfg["from_email"].lower() != cfg["user"].lower(): # Replace all occurrences of "â€˜" with "'"
             return False, "Gmail requires from_email == user. Set both to the same Gmail address."
     msg = _build_mime_message(cfg, to_email, subject, html_body, attachment_bytes, attachment_name)
 
@@ -238,7 +238,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
         except Exception as e2:
             # Compose helpful message
             hint = []
-            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower():
+            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower(): # Replace all occurrences of "â€˜" with "'"
                 hint.append("Network timeoutâ€”your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
             if "gmail" in (cfg["host"] or "").lower():
                 hint.append("For Gmail: use an App Password, and set from_email == user.")
@@ -254,7 +254,7 @@ if "app_settings" not in st.session_state:
 # Show logged-in user at the top-right of the app
 u = st.session_state.get("user", {})
 st.markdown(f"<div style='text-align:right;color:#555;font-size:12px'>"\
-            f"Signed in as: <b>{u.get('name','Guest')}</b> "\
+            f"Signed in as: <b>{u.get('name','Guest')}</b> "# Replace all occurrences of "â€”" with "-"
             f"({u.get('role','guest')}) &lt;{u.get('email','guest@sjcpl.local')}&gt;</div>",
             unsafe_allow_html=True)
 
@@ -277,7 +277,7 @@ GITHUB_API_URL = "https://api.github.com/repos/dnyanesh57/TestRequest_Phase2/con
 COMPANY_DEFAULT = {
     "name": "SJ Contracts Pvt Ltd",
     "address_lines": [
-        "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park",
+        "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park", # Replace all occurrences of "â€“" with "-"
         "Baner Road, Opp. Sadanand Hotel, Baner, Pune â€“ 411045"
     ]
 }
@@ -397,7 +397,7 @@ def _ensure_acl_in_state():
     if "acl_df" in st.session_state:
         return
 
-    df = pd.DataFrame()
+    df = pd.DataFrame() # Replace all occurrences of "â€”" with "-"
 
     # 1) Try DB first
     try:
@@ -545,7 +545,7 @@ def pdf_grouped_lines(
     def add_proj_block(dfp: pd.DataFrame, proj_name: str):
         story.append(Paragraph(f"Project: {proj_name}", styles["BrandH2"]))
         for wo, dwo in dfp.groupby("WO_Key", dropna=False):
-            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum())
+            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "â€”" with "-"
             rmc  = float(pd.to_numeric(dwo.get("Remeasure_Add"), errors="coerce").sum())
             rev  = float(pd.to_numeric(dwo.get("Revised_Qty"), errors="coerce").sum())
             used = float(pd.to_numeric(dwo.get("Used_Qty"), errors="coerce").sum())
@@ -554,7 +554,7 @@ def pdf_grouped_lines(
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             story.append(Paragraph(
                 f"WO: {wo}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
-                f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}",
+                f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}", # Replace all occurrences of "â€”" with "-"
                 styles["Small"]
             ))
             tbl_cols = [c for c in line_cols if c in dwo.columns]
@@ -565,7 +565,7 @@ def pdf_grouped_lines(
     def add_sub_block(dfs: pd.DataFrame, sub_name: str):
         story.append(Paragraph(f"Subcontractor: {sub_name}", styles["BrandH2"]))
         for wo, dwo in dfs.groupby("WO_Key", dropna=False):
-            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum())
+            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "â€”" with "-"
             rmc  = float(pd.to_numeric(dwo.get("Remeasure_Add"), errors="coerce").sum())
             rev  = float(pd.to_numeric(dwo.get("Revised_Qty"), errors="coerce").sum())
             used = float(pd.to_numeric(dwo.get("Used_Qty"), errors="coerce").sum())
@@ -574,7 +574,7 @@ def pdf_grouped_lines(
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             proj = str(dwo["Project_Key"].iloc[0]) if "Project_Key" in dwo.columns and len(dwo)>0 else ""
             story.append(Paragraph(
-                f"WO: {wo}  â€”  Project: {proj}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
+                f"WO: {wo}  â€”  Project: {proj}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  " # Replace all occurrences of "â€”" with "-"
                 f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}",
                 styles["Small"]
             ))
@@ -614,7 +614,7 @@ if "enabled_tabs" not in st.session_state:
     st.session_state.enabled_tabs = _load_enabled_tabs()
 
 def _login_block():
-    _ensure_acl_in_state()
+    _ensure_acl_in_state() # Replace all occurrences of "ðŸ”" with "🔒"
     is_logged_in = "user" in st.session_state
     with st.sidebar.expander("ðŸ” Login", expanded=not is_logged_in):
         emails = sorted(st.session_state.acl_df["email"].unique().tolist())
@@ -708,7 +708,7 @@ def coerce_number(s: pd.Series) -> pd.Series:
     # to string
     s = s.astype(str)
 
-    # normalize whitespace & NBSP
+    # normalize whitespace & NBSP # Replace all occurrences of "â€”" with "-"
     s = s.str.replace("\u00a0", " ", regex=False).str.strip()
     s = s.str.replace(r"\s+", " ", regex=True)
 
@@ -850,7 +850,7 @@ def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
     """
     url = f"https://api.github.com/repos/{repo}/contents/{folder}"
     try:
-        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20)
+        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20) # Replace all occurrences of "â€”" with "-"
         if r.status_code != 200:
             # Bubble up readable diagnostics in UI
             try:
@@ -946,7 +946,7 @@ def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd
 # 1) Stop hitting GitHub on every rerun
 # Only fetch from GitHub when the admin presses a button; otherwise reuse whatâ€™s already loaded.
 # after login/bootstrap:
-if "_raw_df_cache" not in st.session_state:
+if "_raw_df_cache" not in st.session_state: # Replace all occurrences of "â€™" with "'"
     st.session_state._raw_df_cache = None
     st.session_state._raw_df_meta  = ""
 
@@ -1318,7 +1318,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         header_table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('LINEBELOW', (0,0), (-1,-1), 1, colors.HexColor(BRAND_GREY)),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6), # Replace all occurrences of "â€”" with "-"
         ]))
         story.append(header_table)
         story.append(Spacer(1, 4*mm))
@@ -1352,7 +1352,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         _dt_raw = _to_text(p.get("generated_at"))
         try:
             _dt_fmt = pd.to_datetime(_dt_raw)
-            gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14
+            gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14 # Replace all occurrences of "â€”" with "-"
         except Exception:
             gen_at_fmt = _dt_raw if _dt_raw != "â€”" else "â€”"
 
@@ -1360,7 +1360,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             f"<b>Date &amp; Time:</b> {_esc(gen_at_fmt)}"
             f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
             f"<b>Generated by:</b> {_esc(gen_by)}"
-        )
+        ) # Replace all occurrences of "â€”" with "-"
         story.append(Paragraph(dt_by_html, styles["Small"]))
         story.append(Spacer(1, 3*mm))
 
@@ -1377,7 +1377,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         pvt_tbl = Table(
             [
                 [
-                Paragraph("<b>Project:</b>", styles["Small"]),
+                Paragraph("<b>Project:</b>", styles["Small"]), # Replace all occurrences of "â€”" with "-"
                 Paragraph(f"{_esc(proj_name)} ({_esc(proj_code)})", styles["Small"]),
                 Paragraph("<b>Vendor:</b>", styles["Small"]),
                 Paragraph(_esc(vendor), styles["Small"])
@@ -1408,7 +1408,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         try:
             d = pd.to_datetime(p.get("generated_at")).strftime("%d-%m-%Y")
         except Exception:
-            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "â€”" else "â€”"
+            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "â€”" else "â€”" # Replace all occurrences of "â€”" with "-"
 
         # Escape description and stage
         desc = _esc(_to_text(p.get("description")))
@@ -1416,7 +1416,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         item_desc_text = f"{desc} <br/> (Stage: {stage})"
 
         qty_val = _coerce_float(p.get("qty", ""))
-        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "â€”"
+        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "â€”" # Replace all occurrences of "â€”" with "-"
 
         row_data = [
             "1",
@@ -1424,7 +1424,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             Paragraph(item_desc_text, styles["Cell"]),
             qty_str,
             _esc(_to_text(p.get("uom"))),
-            _esc(_to_text(p.get("date_casting"))),
+            _esc(_to_text(p.get("date_casting"))), # Replace all occurrences of "â€”" with "-"
             _esc(_to_text(p.get("date_testing"))),
             Paragraph(_esc(_to_text(p.get("remarks"))), styles["Cell"])
         ]
@@ -1596,7 +1596,7 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
 
     if refs and st.button("ðŸ–¨ï¸ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
         rows = df_filtered[df_filtered["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
-        pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta)
+        pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta) # Replace all occurrences of "ðŸ–¨ï¸" with "🖨️"
         st.download_button(
             "Download PDF (selected refs)",
             data=pdf_bytes,
@@ -1683,7 +1683,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
             f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
             f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
             f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
-            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('â€¦' if len(str(r.get('description',''))) > 80 else ''))}</td>"
+            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('…' if len(str(r.get('description',''))) > 80 else ''))}</td>"
             f"<td style='padding:6px 8px; text-align:right'>{r.get('qty','')} {r.get('uom','')}</td>"
             f"<td style='padding:6px 8px'>{_chip(r.get('status'))}</td>"
             f"<td style='padding:6px 8px'>{r.get('approver','')}</td>"
@@ -1717,7 +1717,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
 
     # Export current view
     st.download_button(
-        "â¬‡ï¸ Download my request log (CSV)",
+        "⬇️ Download my request log (CSV)",
         data=view[show].to_csv(index=False).encode("utf-8"),
         file_name="my_requests_log.csv",
         mime="text/csv",
@@ -1726,7 +1726,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
 
     # ---------- Send Email to Vendor (Approved only) ----------
     st.markdown("---")
-    with st.expander("ðŸ“§ Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
+    with st.expander("✉️ Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
         sendable_refs = view[view["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
         if not sendable_refs:
             st.caption("No Approved / Auto Approved requests in the current list.")
@@ -1858,7 +1858,7 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
         <td style="padding:6px;border:1px solid #ccc">1</td>
         <td style="padding:6px;border:1px solid #ccc">{d}</td>
         <td style="padding:6px;border:1px solid #ccc">{(r.get('description') or '')} (UOM: {(r.get('uom') or '')}; Stage: {(r.get('stage') or '')})</td>
-        <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td>
+        <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td> # Replace all occurrences of "â€”" with "-"
         <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or 'â€”'}</td>
         <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or 'â€”'}</td>
         <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or 'â€”'}</td>
@@ -1874,14 +1874,14 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
 
 def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_meta: Dict):
     """Renders single-ref 'View' (HTML preview) and 'Print' (PDF download) inside Requirements Registry tab."""
-    if df_filtered.empty:
+    if df_filtered.empty: # Replace all occurrences of "ðŸ”Ž" with "🔍"
         st.caption("No records to view/print in current filter.")
         return
-    sel_ref = st.selectbox("Select a Reference to View / Print", [""] + df_filtered["ref"].astype(str).tolist(), key="reg-view-ref")
+    sel_ref = st.selectbox("Select a Reference to View / Print", [""] + df_filtered["ref"].astype(str).tolist(), key="reg-view-ref") # Replace all occurrences of "ðŸ”Ž" with "🔍"
     if not sel_ref:
         return
     row = df_filtered[df_filtered["ref"] == sel_ref].head(1).to_dict(orient="records")[0]
-    with st.expander(f"ðŸ”Ž Preview â€” {sel_ref}", expanded=True):
+    with st.expander(f"ðŸ”Ž Preview — {sel_ref}", expanded=True):
         html = requirement_row_to_html(row, company_meta)
         st.markdown(html, unsafe_allow_html=True)
     if st.button("ðŸ–¨ï¸ Build PDF for this Reference", key="reg-view-print"):
@@ -1890,7 +1890,7 @@ def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_m
 
 def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.DataFrame, company_meta: Dict, save_cb):
     st.markdown("### Admin Tools")
-    c1, c2 = st.columns([1,1])
+    c1, c2 = st.columns([1,1]) # Replace all occurrences of "ðŸ”" with "🔄"
     with c1:
         if st.button("ðŸ” Run Post-CSV Auto-Approval sweep"):
             upd, n = run_post_csv_auto_approvals(reqlog_df, items_df)
@@ -1912,7 +1912,7 @@ if "app_settings" not in st.session_state:
     st.session_state.app_settings = read_app_settings()
 _ensure_reqlog_in_state()
 _login_block()
-
+# Replace all occurrences of "â€”" with "-"
 # Sidebar â€” Upload + Display + Branding
 with st.sidebar:
     st.header("Data Source")
@@ -1933,7 +1933,7 @@ with st.sidebar:
 
     else:
         # Non-admins are locked to GitHub
-        st.write("Using: **GitHub**")
+        st.write("Using: **GitHub**") # Replace all occurrences of "â€”" with "-"
         st.caption(f"{S['github_repo']} â€” {S['github_branch']} â€” /{S['github_folder']}")
         S["data_source"] = "github"
 
@@ -1965,7 +1965,7 @@ with st.sidebar:
     st.markdown("---")
     st.subheader("Display & Alerts")
     low_metric = st.selectbox("Low-qty metric", ["Remaining_Qty","Revised_Qty","Initial_Qty"], index=0, key="low-metric")
-    low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr")
+    low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr") # Replace all occurrences of "ðŸ·ï¸" with "🏢"
 
 if _user_is_master_admin():
     with st.sidebar.expander("ðŸ·ï¸ Company & Branding (Admin)"):
@@ -1976,7 +1976,7 @@ if _user_is_master_admin():
         if st.button("Apply", key="company-apply"):
             st.session_state.company_meta = {"name":name,"address_lines":[addr1,addr2], "logo_path_or_url": logo_path}
             st.success("Brand details applied.")
-    with st.sidebar.expander("âš™ï¸ Data Source (Admin)", expanded=False):
+    with st.sidebar.expander("⚙️ Data Source (Admin)", expanded=False):
         S = st.session_state.app_settings
         use_gh = st.checkbox("Use GitHub as the ONLY data source", value=S.get("use_github", True), key="adm-use-gh")
         repo   = st.text_input("Repo (owner/repo)", value=S.get("github_repo","dnyanesh57/NC_Dashboard"), key="adm-gh-repo")
@@ -1989,7 +1989,7 @@ if _user_is_master_admin():
             st.session_state.app_settings = read_app_settings()
             st.success("Data source settings saved.")
             st.rerun()
-    with st.sidebar.expander("ðŸ”Ž GitHub Diagnostics", expanded=False):
+    with st.sidebar.expander("🔍 GitHub Diagnostics", expanded=False):
         S = st.session_state.app_settings
         if st.button("Test GitHub connection", key="gh-test"):
             try:
@@ -2153,7 +2153,7 @@ for i, tab_label in enumerate(visible_tabs):
                 st.subheader("Grouped Lines â€” Project â†’ Work Order")
                 q = st.text_input("Search (WO / Desc / Stage)", "", key="ov-q").strip().lower()
                 cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty"]
-                cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols")
+                cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols") # Replace all occurrences of "â€”" with "-"
 
                 view = items_f.copy()
                 if q:
@@ -2169,7 +2169,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} â€” Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ov", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
         elif tab_label == "Group: WO â†’ Project":
@@ -2194,7 +2194,7 @@ for i, tab_label in enumerate(visible_tabs):
                     view = view[view["Subcontractor_Key"].isin(sel)].copy()
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} â€” Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="gp", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 ) # usage: paginated_df(view[inner_cols], key="gp")
         elif tab_label == "Work Order Explorer":
@@ -2222,7 +2222,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ex", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
                 if not submitted:
@@ -2272,7 +2272,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"**Project:** {r.get('Project_Key','')}")
                                     st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
                                     st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
-                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}")
+                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}") # Replace all occurrences of "â€”" with "-"
                                     st.write(f"**Desc:** {r.get('OD_Description','')}")
                                     if r.get("Remaining_Qty", np.nan) < low_threshold:
                                         st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
@@ -2283,7 +2283,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
                                     st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
                                 with c3:
-                                    st.markdown("**Instruction (II_) & Dates**")
+                                    st.markdown("**Instruction (II_) & Dates**") # Replace all occurrences of "âˆ’" with "-"
                                     st.write(f"WO Title: {r.get('OI_Title','')}")
                                     st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
                                     st.write(f"Approval: {r.get('II_Approval Status','')}")
@@ -2328,7 +2328,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                     render_grouped_lines(
                         view.sort_values(["Subcontractor_Key","WO_Key","Line_Key"]),
-                        ("Subcontractor_Key","WO_Key"), cols_pick,
+                        ("Subcontractor_Key","WO_Key"), cols_pick, # Replace all occurrences of "â€”" with "-"
                         title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                         key_prefix="sub", suppress_outer=False, thr_text=f"{low_threshold:g}"
                     )
@@ -2376,7 +2376,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="as", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
                 submitted = st.form_submit_button("Apply")
@@ -3193,4 +3193,4 @@ for i, tab_label in enumerate(visible_tabs):
                     st.rerun()
 
 
-st.caption("Â© SJCPL-Test Request and Approvals â€” V1")
+st.caption("&copy; SJCPL - Test Request and Approvals &mdash; V1")
