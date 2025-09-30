@@ -2638,8 +2638,8 @@ for i, tab_label in enumerate(visible_tabs):
                                 if "rq-email-approver" in st.session_state:
                                     st.session_state.pop("rq-email-approver")
                         with cc3:
-                            # Email vendor after generating PDF
-                            email_vendor_after = st.checkbox("dY", "Email vendor automatically after generating PDF", value=st.session_state.get("rq-email-vendor", True), key="rq-email-vendor")
+                            # Email vendor after generating PDF # Fix: Removed duplicate "dY" argument
+                            email_vendor_after = st.checkbox("Email vendor automatically after generating PDF", value=st.session_state.get("rq-email-vendor", True), key="rq-email-vendor")
                             gen_click = st.button("dY", "Generate PDF & Log", type="primary", key="rq-gen")
                         if gen_click:
                             approval_email_enabled = email_approval_after
