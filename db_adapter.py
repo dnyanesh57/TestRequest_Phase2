@@ -365,6 +365,25 @@ def write_app_settings(use_github: bool, repo: str, branch: str, folder: str) ->
         """), dict(use_github=bool(use_github), repo=repo, branch=branch, folder=folder))
 
 
+def _clean_row_for_db(row: dict) -> dict:
+    clean = {}
+    for k, v in row.items():
+        if isinstance(v, pd.Timestamp):
+            clean[k] = None if pd.isna(v) else v.to_pydatetime()
+        elif isinstance(v, dt.datetime):
+            clean[k] = v.tzinfo and v or v.replace(tzinfo=None)
+        elif isinstance(v, float) and pd.isna(v):
+            clean[k] = None
+        elif isinstance(v, pd.Series) or isinstance(v, pd.DataFrame):
+            clean[k] = None
+        else:
+            try:
+                clean[k] = None if pd.isna(v) else v
+            except Exception:
+                clean[k] = v
+    return clean
+
+
 def upsert_requirements(rows: list[dict]) -> None:
     _ensure_requirements_log_table() # Ensure table exists before upserting
     if not rows: return
@@ -385,7 +404,7 @@ def upsert_requirements(rows: list[dict]) -> None:
     """)
     with _engine.begin() as cx:
         for r in rows:
-            cx.execute(sql, r)
+            cx.execute(sql, _clean_row_for_db(r))
 def _table_exists(table_name: str) -> bool:
     """
     Checks if a table exists in the database.
