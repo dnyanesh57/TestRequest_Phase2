@@ -53,7 +53,7 @@ APP_TITLE = "SJCPL - Test Request and Approval V1"
 BRAND_BLUE = "#00AEDA"; BRAND_BLACK = "#000000"; BRAND_GREY = "#939598"; BRAND_WHITE = "#FFFFFF"
 PLOTLY_COLORS = [BRAND_BLUE, BRAND_BLACK, BRAND_GREY, "#146C94", "#4A4A4A"]
 
-st.set_page_config(page_title=APP_TITLE, page_icon="ðŸ“‘", layout="wide")
+st.set_page_config(page_title=APP_TITLE, page_icon="📑", layout="wide")
 pd.options.mode.copy_on_write = True
 px.defaults.template = "plotly_white"; px.defaults.color_discrete_sequence = PLOTLY_COLORS
 # Replace all occurrences of "ðŸ“‘" with "📊"
