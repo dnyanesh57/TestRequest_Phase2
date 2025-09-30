@@ -32,6 +32,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import urllib.request
 import urllib.error
+from urllib.parse import quote_plus
 import pytz
 
 # PDF (pure-Python)
@@ -503,6 +504,20 @@ def _set_user_password(email: str, password_hash: str) -> bool:
     except Exception:
         pass
     return persisted
+
+def _app_base_url() -> str:
+    try:
+        base = st.secrets.get('app', {}).get('base_url', '')
+    except Exception:
+        base = os.getenv('APP_BASE_URL', '')
+    return (base or '').strip().rstrip('/')
+
+def _build_password_reset_url(email: str, token: str) -> str | None:
+    base = _app_base_url()
+    if not base:
+        return None
+    return f"{base}?reset_email={quote_plus(email)}&reset_token={quote_plus(token)}"
+
 def _handle_password_reset_request(email: str):
     email_normalized = (email or "").strip().lower()
     if not email_normalized:
@@ -513,40 +528,57 @@ def _handle_password_reset_request(email: str):
     if df.empty or df[df["email"].astype(str).str.lower() == email_normalized].empty:
         st.error("No account found with that email.")
         return
-    code = f"{secrets.randbelow(1_000_000):06d}"
     token = uuid.uuid4().hex
-    expires_at = (dt.datetime.utcnow() + dt.timedelta(minutes=30)).isoformat()
-    code_hash = _sha256_hex(f"{token}|{code}")
+    expires_at_dt = dt.datetime.utcnow() + dt.timedelta(minutes=30)
+    expires_at_iso = expires_at_dt.isoformat()
+    code_hash = _sha256_hex(token)
     requested_by = st.session_state.get("user", {}).get("email")
     try:
-        create_password_reset_entry(email_normalized, token, code_hash, expires_at, requested_by)
+        create_password_reset_entry(email_normalized, token, code_hash, expires_at_iso, requested_by)
     except Exception as exc:
         st.error(f"Could not create reset request: {exc}")
         return
+    reset_url = _build_password_reset_url(email_normalized, token)
     subject = "SJCPL Password Reset"
-    html_body = f"""
-    <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
-      <p>Hi,</p>
-      <p>We received a request to reset the password for <b>{email_normalized}</b>.</p>
-      <p><b>Reset code:</b> {code}<br/><b>Reset token:</b> {token}</p>
-      <p>This code expires in 30 minutes. Enter both the code and token in the app to set a new password.</p>
-      <p>If you did not request this reset, you can ignore this email.</p>
-      <p>Regards,<br/>SJCPL - Test Request and Approvals</p>
-    </div>
-    """
+    if reset_url:
+        html_body = f"""
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+          <p>Hi,</p>
+          <p>We received a request to reset the password for <b>{email_normalized}</b>.</p>
+          <p><a href="{reset_url}">Click here to reset your password</a>.</p>
+          <p>The link expires in 30 minutes. If you did not request this reset, you can ignore this email.</p>
+          <p>Regards,<br/>SJCPL - Test Request and Approvals</p>
+        </div>
+        """
+    else:
+        html_body = f"""
+        <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+          <p>Hi,</p>
+          <p>We received a request to reset the password for <b>{email_normalized}</b>.</p>
+          <p>Copy this token and paste it in the password reset form: <b>{token}</b></p>
+          <p>The token expires in 30 minutes. If you did not request this reset, you can ignore this email.</p>
+          <p>Regards,<br/>SJCPL - Test Request and Approvals</p>
+        </div>
+        """
     ok_mail, msg_mail = send_email_via_smtp(email_normalized, subject, html_body, None, None)
     if ok_mail:
-        st.success("Password reset instructions have been emailed. Please check your inbox and spam folder.")
+        if reset_url:
+            st.success("Password reset link has been emailed. Please check your inbox and spam folder.")
+        else:
+            st.success("Password reset token has been emailed. Please check your inbox and spam folder.")
+        if reset_url:
+            st.info(f"Reset link: {reset_url}")
+        elif not _app_base_url():
+            st.warning("Set APP_BASE_URL or app.base_url in secrets to send clickable reset links.")
     else:
         st.error(f"Email failed: {msg_mail}")
 
 
-def _handle_password_reset_submit(email: str, token: str, code: str, new_password: str, confirm_password: str):
+def _handle_password_reset_submit(email: str, token: str, new_password: str, confirm_password: str):
     email_normalized = (email or "").strip().lower()
     token = (token or "").strip()
-    code = (code or "").strip()
-    if not email_normalized or not token or not code:
-        st.error("Email, token, and reset code are required.")
+    if not email_normalized or not token:
+        st.error("Email and reset token are required.")
         return
     if not new_password or not confirm_password:
         st.error("Enter and confirm the new password.")
@@ -585,8 +617,8 @@ def _handle_password_reset_submit(email: str, token: str, code: str, new_passwor
         st.error("This reset token has expired. Please request a new one.")
         return
     expected_hash = record.get("code_hash")
-    if expected_hash != _sha256_hex(f"{token}|{code}"):
-        st.error("Incorrect reset code.")
+    if expected_hash != _sha256_hex(token):
+        st.error("Invalid reset token.")
         return
     new_hash = _sha256_hex(new_password)
     if not _set_user_password(email_normalized, new_hash):
@@ -805,6 +837,16 @@ def _login_block():
     _ensure_acl_in_state()
     is_logged_in = "user" in st.session_state
 
+    params = st.experimental_get_query_params()
+    pending_email = params.get("reset_email", [None])[0]
+    pending_token = params.get("reset_token", [None])[0]
+    if pending_email and "rbac-reset-email-confirm" not in st.session_state:
+        st.session_state["rbac-reset-email-confirm"] = pending_email
+    if pending_token and "rbac-reset-token" not in st.session_state:
+        st.session_state["rbac-reset-token"] = pending_token
+    if pending_email or pending_token:
+        st.experimental_set_query_params()
+
     with st.sidebar.expander("Login", expanded=not is_logged_in):
         emails = sorted(st.session_state.acl_df["email"].unique().tolist())
         email = st.selectbox("User", emails, index=0 if emails else None, key="rbac-email")
@@ -830,17 +872,19 @@ def _login_block():
 
     with st.sidebar.expander("Forgot password?", expanded=False):
         reset_email = st.text_input("Email", key="rbac-reset-email")
-        if st.button("Send reset code", key="rbac-reset-send"):
+        if st.button("Send reset link", key="rbac-reset-send"):
             _handle_password_reset_request(reset_email)
 
-    with st.sidebar.expander("Reset password", expanded=False):
+    reset_expanded = bool(st.session_state.get("rbac-reset-token"))
+    with st.sidebar.expander("Reset password", expanded=reset_expanded):
         reset_email_confirm = st.text_input("Email", key="rbac-reset-email-confirm")
         reset_token = st.text_input("Reset token", key="rbac-reset-token")
-        reset_code = st.text_input("Reset code", key="rbac-reset-code")
         new_pwd = st.text_input("New password", type="password", key="rbac-reset-new")
         confirm_pwd = st.text_input("Confirm new password", type="password", key="rbac-reset-confirm")
         if st.button("Apply reset", key="rbac-reset-apply"):
-            _handle_password_reset_submit(reset_email_confirm, reset_token, reset_code, new_pwd, confirm_pwd)
+            _handle_password_reset_submit(reset_email_confirm, reset_token, new_pwd, confirm_pwd)
+        if reset_expanded and st.session_state.get("rbac-reset-token"):
+            st.info("Enter a new password to complete the reset.")
 
     if is_logged_in:
         with st.sidebar.expander("Change password", expanded=False):
