@@ -191,10 +191,19 @@ def create_password_reset_entry(email: str, token: str, code_hash: str, expires_
             """), {"em": email, "tk": token, "ch": code_hash, "ex": expires_at_iso, "rb": requested_by})
         else:
             c.execute(text("DELETE FROM password_reset_tokens WHERE email = :em AND used_at IS NULL"), {"em": email})
+            ex_value = expires_at_iso
+            if isinstance(expires_at_iso, str):
+                try:
+                    ex_value = dt.datetime.fromisoformat(expires_at_iso)
+                except ValueError:
+                    try:
+                        ex_value = pd.to_datetime(expires_at_iso).to_pydatetime()
+                    except Exception:
+                        ex_value = dt.datetime.utcnow()
             c.execute(text("""
                 INSERT INTO password_reset_tokens(email, token, code_hash, expires_at, requested_by)
-                VALUES (:em, :tk, :ch, :ex::timestamptz, :rb)
-            """), {"em": email, "tk": token, "ch": code_hash, "ex": expires_at_iso, "rb": requested_by})
+                VALUES (:em, :tk, :ch, :ex, :rb)
+            """), {"em": email, "tk": token, "ch": code_hash, "ex": ex_value, "rb": requested_by})
 
 
 def fetch_password_reset(email: str, token: str) -> dict | None:
