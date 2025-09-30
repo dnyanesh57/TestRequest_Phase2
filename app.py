@@ -121,6 +121,15 @@ _ensure_once("_approval_tables_ready", ensure_approval_recipient_tables, "DB ini
 # Ensure reqlog email columns exist
 _ensure_once("_reqlog_email_columns_ready", ensure_reqlog_email_columns, "Could not verify emailed_* columns on requirements_log", level="warning")
 
+if "filter_state" not in st.session_state:
+    st.session_state.filter_state = {
+        "low_metric": "Remaining_Qty",
+        "low_threshold": 10.0,
+        "projects": [],
+        "subs": [],
+        "wos": [],
+    }
+
 # SMTP + mail helpers (add once, top-level)
 from email.mime.text import MIMEText
 from email import encoders
@@ -2230,8 +2239,16 @@ with st.sidebar:
     # Display & Alerts (moved here so it stays in sidebar)
     st.markdown("---")
     st.subheader("Display & Alerts")
-    low_metric = st.selectbox("Low-qty metric", ["Remaining_Qty","Revised_Qty","Initial_Qty"], index=0, key="low-metric")
-    low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr") # Replace all occurrences of "ðŸ·ï¸" with "🏢"
+    metrics = ["Remaining_Qty", "Revised_Qty", "Initial_Qty"]
+    current_metric = st.session_state.filter_state.get("low_metric", metrics[0])
+    current_threshold = float(st.session_state.filter_state.get("low_threshold", 10.0))
+    with st.form("display_alerts_form"):
+        low_metric_choice = st.selectbox("Low-qty metric", metrics, index=metrics.index(current_metric))
+        low_threshold_choice = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=current_threshold, step=1.0)
+        display_submit = st.form_submit_button("Apply display settings")
+    if display_submit:
+        st.session_state.filter_state["low_metric"] = low_metric_choice
+        st.session_state.filter_state["low_threshold"] = low_threshold_choice
 
 if _user_is_master_admin():
     with st.sidebar.expander("🏷️ Company & Branding (Admin)"):
@@ -2293,9 +2310,18 @@ if raw_df.empty:
 items_df = compute_items(raw_df)
 summary_df = wo_summary(items_df)
 sig = _df_signature(raw_df)
-items_df = compute_items(raw_df) # already @st.cache_data
-summary_df = wo_summary(items_df) # already cached
+if st.session_state.get("_filter_dataset_sig") != sig:
+    st.session_state["_filter_dataset_sig"] = sig
+    fs_reset = st.session_state.filter_state
+    fs_reset["projects"] = []
+    fs_reset["subs"] = []
+    fs_reset["wos"] = []
+    st.session_state.pop("filter_projects", None)
+    st.session_state.pop("filter_subs", None)
+    st.session_state.pop("filter_wos", None)
 items_df = _shrink(items_df)
+low_metric = st.session_state.filter_state["low_metric"]
+low_threshold = float(st.session_state.filter_state["low_threshold"])
 items_df = annotate_low(items_df, low_metric, low_threshold)
 
 # Global filters
@@ -2303,28 +2329,75 @@ projects = sorted([p for p in items_df["Project_Key"].dropna().unique()])
 subs     = sorted([s for s in items_df["Subcontractor_Key"].dropna().unique()])
 wos      = sorted([w for w in items_df["WO_Key"].dropna().unique()])
 
-if _user_is_master_admin() or _user_is_site_admin():
-    c1, c2, c3 = st.columns([1.2,1.2,1.2])
-    with c1: f_projects = st.multiselect("Project(s)", projects, default=projects, key="f_proj")
-    with c2: f_subs     = st.multiselect("Vendor(s) â€” Global", subs, default=subs, key="f_sub")
-    with c3: f_wos      = st.multiselect("Work Order(s)", wos, default=[], key="f_wo")
+fs = st.session_state.filter_state
+if not fs.get("projects"):
+    fs["projects"] = projects.copy()
 else:
-    user_sites = _user_allowed_sites()
-    if "*" in user_sites:
-        f_projects = projects
-        f_subs = subs
-        f_wos = wos
-    else:
-        f_projects = user_sites
-        project_items = items_df[items_df["Project_Key"].isin(f_projects)]
-        f_subs = sorted(project_items["Subcontractor_Key"].dropna().unique())
-        f_wos = sorted(project_items["WO_Key"].dropna().unique())
+    fs["projects"] = [p for p in fs["projects"] if p in projects] or projects.copy()
+if not fs.get("subs"):
+    fs["subs"] = subs.copy()
+else:
+    fs["subs"] = [s for s in fs["subs"] if s in subs] or subs.copy()
+fs["wos"] = [w for w in fs.get("wos", []) if w in wos]
 
-mask = (
-    items_df["Project_Key"].isin(f_projects) &
-    items_df["Subcontractor_Key"].isin(f_subs) &
-    (True if not f_wos else items_df["WO_Key"].isin(f_wos))
-)
+if "filter_projects" not in st.session_state:
+    st.session_state["filter_projects"] = fs["projects"].copy()
+else:
+    cleaned_proj_state = [p for p in st.session_state["filter_projects"] if p in projects]
+    if cleaned_proj_state != st.session_state["filter_projects"]:
+        st.session_state["filter_projects"] = (cleaned_proj_state or fs["projects"].copy())
+if "filter_subs" not in st.session_state:
+    st.session_state["filter_subs"] = fs["subs"].copy()
+else:
+    cleaned_sub_state = [s for s in st.session_state["filter_subs"] if s in subs]
+    if cleaned_sub_state != st.session_state["filter_subs"]:
+        st.session_state["filter_subs"] = (cleaned_sub_state or fs["subs"].copy())
+if "filter_wos" not in st.session_state:
+    st.session_state["filter_wos"] = fs["wos"].copy()
+else:
+    cleaned_wo_state = [w for w in st.session_state["filter_wos"] if w in wos]
+    if cleaned_wo_state != st.session_state["filter_wos"]:
+        st.session_state["filter_wos"] = cleaned_wo_state
+
+if _user_is_master_admin() or _user_is_site_admin():
+    with st.form("global_filters_form"):
+        c1, c2, c3 = st.columns([1.2, 1.2, 1.2])
+        with c1:
+            st.multiselect("Project(s)", projects, default=fs["projects"], key="filter_projects")
+        with c2:
+            st.multiselect("Vendor(s) - Global", subs, default=fs["subs"], key="filter_subs")
+        with c3:
+            st.multiselect("Work Order(s)", wos, default=fs["wos"], key="filter_wos")
+        filters_submit = st.form_submit_button("Apply filters")
+    if filters_submit:
+        fs["projects"] = [p for p in st.session_state.get("filter_projects", []) if p in projects]
+        if not fs["projects"]:
+            fs["projects"] = projects.copy()
+        st.session_state["filter_projects"] = fs["projects"]
+        fs["subs"] = [s for s in st.session_state.get("filter_subs", []) if s in subs]
+        if not fs["subs"]:
+            fs["subs"] = subs.copy()
+        st.session_state["filter_subs"] = fs["subs"]
+        fs["wos"] = [w for w in st.session_state.get("filter_wos", []) if w in wos]
+        st.session_state["filter_wos"] = fs["wos"]
+else:
+    st.session_state["filter_projects"] = fs["projects"]
+    st.session_state["filter_subs"] = fs["subs"]
+    st.session_state["filter_wos"] = fs["wos"]
+
+selected_projects = fs["projects"]
+selected_subs = fs["subs"]
+selected_wos = fs.get("wos", [])
+
+f_projects = selected_projects
+f_subs = selected_subs
+f_wos = selected_wos
+
+true_series = pd.Series(True, index=items_df.index)
+proj_mask = items_df["Project_Key"].isin(selected_projects) if selected_projects else true_series
+sub_mask = items_df["Subcontractor_Key"].isin(selected_subs) if selected_subs else true_series
+wo_mask = items_df["WO_Key"].isin(selected_wos) if selected_wos else true_series
+mask = proj_mask & sub_mask & wo_mask
 items_f = items_df[mask].copy()
 items_f = _shrink(items_f)
 summary_f, proj_agg, sub_agg = pre_aggregations(items_f)
