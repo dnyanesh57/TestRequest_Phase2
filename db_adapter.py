@@ -144,6 +144,100 @@ def get_vendor_email(vendor: str) -> str | None:
         r = c.execute(text("SELECT email FROM vendor_contacts WHERE vendor_key = :v"), {"v": vendor}).scalar()
         return r if r else None
 
+def ensure_password_reset_tables() -> None:
+    """Create password_reset_tokens table if missing."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT NOT NULL,
+                  token TEXT NOT NULL UNIQUE,
+                  code_hash TEXT NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  expires_at TEXT NOT NULL,
+                  used_at TEXT,
+                  requested_by TEXT
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_password_reset_email ON password_reset_tokens(email)"))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                  id BIGSERIAL PRIMARY KEY,
+                  email TEXT NOT NULL,
+                  token TEXT NOT NULL UNIQUE,
+                  code_hash TEXT NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  expires_at TIMESTAMPTZ NOT NULL,
+                  used_at TIMESTAMPTZ,
+                  requested_by TEXT
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_password_reset_email ON password_reset_tokens(email)"))
+
+
+def create_password_reset_entry(email: str, token: str, code_hash: str, expires_at_iso: str, requested_by: str | None = None) -> None:
+    """Insert a new password reset token, clearing previous unused tokens."""
+    email = (email or '').strip().lower()
+    if not email:
+        raise ValueError('email required')
+    with _conn() as c:
+        if DB_URL.startswith('sqlite'):
+            c.execute(text("DELETE FROM password_reset_tokens WHERE email = :em AND used_at IS NULL"), {"em": email})
+            c.execute(text("""
+                INSERT INTO password_reset_tokens(email, token, code_hash, expires_at, requested_by)
+                VALUES (:em, :tk, :ch, :ex, :rb)
+            """), {"em": email, "tk": token, "ch": code_hash, "ex": expires_at_iso, "rb": requested_by})
+        else:
+            c.execute(text("DELETE FROM password_reset_tokens WHERE email = :em AND used_at IS NULL"), {"em": email})
+            c.execute(text("""
+                INSERT INTO password_reset_tokens(email, token, code_hash, expires_at, requested_by)
+                VALUES (:em, :tk, :ch, :ex::timestamptz, :rb)
+            """), {"em": email, "tk": token, "ch": code_hash, "ex": expires_at_iso, "rb": requested_by})
+
+
+def fetch_password_reset(email: str, token: str) -> dict | None:
+    email = (email or '').strip().lower()
+    token = (token or '').strip()
+    if not email or not token:
+        return None
+    with _conn() as c:
+        row = c.execute(text("""
+            SELECT email, token, code_hash, created_at, expires_at, used_at, requested_by
+              FROM password_reset_tokens
+             WHERE email = :em AND token = :tk
+             ORDER BY created_at DESC
+             LIMIT 1
+        """), {"em": email, "tk": token}).mappings().first()
+        return dict(row) if row else None
+
+
+def mark_password_reset_used(token: str) -> None:
+    token = (token or '').strip()
+    if not token:
+        return
+    with _conn() as c:
+        if DB_URL.startswith('sqlite'):
+            c.execute(text("""
+                UPDATE password_reset_tokens
+                   SET used_at = datetime('now')
+                 WHERE token = :tk
+            """), {"tk": token})
+        else:
+            c.execute(text("""
+                UPDATE password_reset_tokens
+                   SET used_at = NOW()
+                 WHERE token = :tk
+            """), {"tk": token})
+
+
+def update_user_password_hash(email: str, password_hash: str) -> None:
+    email = (email or '').strip().lower()
+    if not email:
+        raise ValueError('email required')
+    with _conn() as c:
+        c.execute(text("UPDATE acl_users SET password_hash = :ph WHERE lower(email) = :em"), {"ph": password_hash, "em": email})
 def log_requirement_email(ref: str, vendor: str, email: str, subject: str, ok: bool, error: str | None = None) -> None:
     """Audit log for outgoing requirement emails."""
     with _conn() as c:

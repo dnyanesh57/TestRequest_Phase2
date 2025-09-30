@@ -2,7 +2,7 @@
 # SJCPL â€” Work Order Dashboard (Phase 1 + Phase 2) â€” Integrated Engine
 # Final, Complete, and Functional Version
 from __future__ import annotations
-import io, os, uuid, hmac, hashlib, json, base64,requests
+import io, os, uuid, hmac, hashlib, json, base64, requests, secrets
 import datetime as dt
 from typing import Dict, List, Sequence, Tuple, Optional
 from db_adapter import (
@@ -17,6 +17,8 @@ from db_adapter import (
     ensure_approval_recipient_tables, read_approval_recipients,
     mark_vendor_emailed, ensure_reqlog_email_columns, # Add these with your other db_adapter imports:
     upsert_approval_recipient, delete_approval_recipient, list_approver_emails,
+    ensure_password_reset_tables, create_password_reset_entry, fetch_password_reset,
+    mark_password_reset_used, update_user_password_hash,
 
     
     update_requirement_status, read_requirements_by_refs, _conn,
@@ -96,6 +98,12 @@ try:
     ensure_vendor_email_tables()
 except Exception as e:
     st.error(f"DB init (vendor email tables) failed: {e}")
+
+# Ensure password reset table exists
+try:
+    ensure_password_reset_tables()
+except Exception as e:
+    st.error(f"DB init (password reset table) failed: {e}")
 
 # Ensure approval recipient tables exist
 try:
@@ -447,6 +455,186 @@ def _ensure_acl_in_state():
 
     st.session_state.acl_df = df
 
+def _refresh_acl_from_source() -> pd.DataFrame:
+    df = pd.DataFrame()
+    try:
+        df = read_acl_df()
+    except Exception:
+        df = pd.DataFrame()
+    if df is None or df.empty:
+        df = _load_csv_safe(ACL_FILE_NAME)
+    if df is None:
+        df = pd.DataFrame()
+    if df.empty:
+        return df
+    st.session_state.acl_df = df
+    return df
+
+
+def _set_user_password(email: str, password_hash: str) -> bool:
+    email_norm = (email or "").strip().lower()
+    if not email_norm:
+        return False
+    df = st.session_state.get("acl_df")
+    if df is None or df.empty:
+        df = _refresh_acl_from_source()
+    if df is None or df.empty:
+        return False
+    mask = df["email"].astype(str).str.lower() == email_norm
+    if not mask.any():
+        return False
+    df = df.copy()
+    df.loc[mask, "password_hash"] = password_hash
+    st.session_state.acl_df = df
+    persisted = False
+    try:
+        update_user_password_hash(email_norm, password_hash)
+        persisted = True
+    except Exception:
+        persisted = False
+    if not persisted:
+        try:
+            write_acl_df(df)
+            persisted = True
+        except Exception:
+            persisted = False
+    try:
+        _save_csv_safe(df, ACL_FILE_NAME)
+    except Exception:
+        pass
+    return persisted
+def _handle_password_reset_request(email: str):
+    email_normalized = (email or "").strip().lower()
+    if not email_normalized:
+        st.error("Email is required for reset.")
+        return
+    _ensure_acl_in_state()
+    df = st.session_state.get("acl_df", pd.DataFrame())
+    if df.empty or df[df["email"].astype(str).str.lower() == email_normalized].empty:
+        st.error("No account found with that email.")
+        return
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    token = uuid.uuid4().hex
+    expires_at = (dt.datetime.utcnow() + dt.timedelta(minutes=30)).isoformat()
+    code_hash = _sha256_hex(f"{token}|{code}")
+    requested_by = st.session_state.get("user", {}).get("email")
+    try:
+        create_password_reset_entry(email_normalized, token, code_hash, expires_at, requested_by)
+    except Exception as exc:
+        st.error(f"Could not create reset request: {exc}")
+        return
+    subject = "SJCPL Password Reset"
+    html_body = f"""
+    <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+      <p>Hi,</p>
+      <p>We received a request to reset the password for <b>{email_normalized}</b>.</p>
+      <p><b>Reset code:</b> {code}<br/><b>Reset token:</b> {token}</p>
+      <p>This code expires in 30 minutes. Enter both the code and token in the app to set a new password.</p>
+      <p>If you did not request this reset, you can ignore this email.</p>
+      <p>Regards,<br/>SJCPL - Test Request and Approvals</p>
+    </div>
+    """
+    ok_mail, msg_mail = send_email_via_smtp(email_normalized, subject, html_body, None, None)
+    if ok_mail:
+        st.success("Password reset instructions have been emailed. Please check your inbox and spam folder.")
+    else:
+        st.error(f"Email failed: {msg_mail}")
+
+
+def _handle_password_reset_submit(email: str, token: str, code: str, new_password: str, confirm_password: str):
+    email_normalized = (email or "").strip().lower()
+    token = (token or "").strip()
+    code = (code or "").strip()
+    if not email_normalized or not token or not code:
+        st.error("Email, token, and reset code are required.")
+        return
+    if not new_password or not confirm_password:
+        st.error("Enter and confirm the new password.")
+        return
+    if new_password != confirm_password:
+        st.error("Passwords do not match.")
+        return
+    if len(new_password) < 8:
+        st.error("Choose a password with at least 8 characters.")
+        return
+    record = fetch_password_reset(email_normalized, token)
+    if not record:
+        st.error("Invalid reset token or email.")
+        return
+    if record.get("used_at") not in (None, "", 0):
+        st.error("This reset token has already been used.")
+        return
+    expires_at = record.get("expires_at")
+    expires_dt = None
+    if isinstance(expires_at, dt.datetime):
+        expires_dt = expires_at if expires_at.tzinfo else expires_at.replace(tzinfo=dt.timezone.utc)
+    elif expires_at:
+        try:
+            expires_dt = pd.to_datetime(expires_at, utc=True)
+        except Exception:
+            expires_dt = None
+    if expires_dt is None:
+        st.error("Could not validate token expiry.")
+        return
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    if hasattr(expires_dt, "tz_convert"):
+        expires_dt = expires_dt.tz_convert(dt.timezone.utc)
+    elif expires_dt.tzinfo is None:
+        expires_dt = expires_dt.replace(tzinfo=dt.timezone.utc)
+    if now_utc > expires_dt:
+        st.error("This reset token has expired. Please request a new one.")
+        return
+    expected_hash = record.get("code_hash")
+    if expected_hash != _sha256_hex(f"{token}|{code}"):
+        st.error("Incorrect reset code.")
+        return
+    new_hash = _sha256_hex(new_password)
+    if not _set_user_password(email_normalized, new_hash):
+        st.error("Could not update the password. Please contact an administrator.")
+        return
+    try:
+        mark_password_reset_used(token)
+    except Exception:
+        pass
+    _refresh_acl_from_source()
+    st.success("Password updated successfully. You can now sign in with the new password.")
+
+
+def _handle_password_change(current_password: str, new_password: str, confirm_password: str):
+    if not new_password or not confirm_password:
+        st.error("Enter and confirm the new password.")
+        return
+    if new_password != confirm_password:
+        st.error("Passwords do not match.")
+        return
+    if len(new_password) < 8:
+        st.error("Choose a password with at least 8 characters.")
+        return
+    user = st.session_state.get("user", {})
+    email = user.get("email")
+    if not email:
+        st.error("You must be signed in to change your password.")
+        return
+    df = st.session_state.get("acl_df", pd.DataFrame())
+    mask = df["email"].astype(str).str.lower() == email.lower()
+    if df.empty or not mask.any():
+        st.error("Could not locate your account record.")
+        return
+    current_hash = df.loc[mask, "password_hash"].iloc[0]
+    if _sha256_hex(current_password or "") != current_hash:
+        st.error("Current password is incorrect.")
+        return
+    if current_password == new_password:
+        st.error("New password must be different from the current password.")
+        return
+    new_hash = _sha256_hex(new_password)
+    if not _set_user_password(email, new_hash):
+        st.error("Could not update the password. Please try again or contact an administrator.")
+        return
+    _refresh_acl_from_source()
+    st.success("Password updated successfully.")
+
+
 def _build_width_map(header_cols: list[str]) -> dict[str,int]:
     return {c: _col_width(c) for c in header_cols}
 
@@ -614,30 +802,53 @@ if "enabled_tabs" not in st.session_state:
     st.session_state.enabled_tabs = _load_enabled_tabs()
 
 def _login_block():
-    _ensure_acl_in_state() # Replace all occurrences of "ðŸ”" with "🔒"
+    _ensure_acl_in_state()
     is_logged_in = "user" in st.session_state
-    with st.sidebar.expander("ðŸ” Login", expanded=not is_logged_in):
+
+    with st.sidebar.expander("Login", expanded=not is_logged_in):
         emails = sorted(st.session_state.acl_df["email"].unique().tolist())
         email = st.selectbox("User", emails, index=0 if emails else None, key="rbac-email")
         pwd = st.text_input("Password", type="password", key="rbac-pwd")
         if st.button("Sign in", type="primary", key="rbac-go"):
-            row = st.session_state.acl_df[st.session_state.acl_df["email"]==email].head(1)
-            if not row.empty and _sha256_hex(pwd)==row.iloc[0]["password_hash"]:
+            row = st.session_state.acl_df[st.session_state.acl_df["email"] == email].head(1)
+            if not row.empty and _sha256_hex(pwd) == row.iloc[0]["password_hash"]:
                 st.session_state.user = {
                     "email": email,
                     "name": row.iloc[0]["name"],
-                    "role": ("master_admin" if str(row.iloc[0]["role"]).lower()=="admin" else row.iloc[0]["role"]),
+                    "role": ("master_admin" if str(row.iloc[0]["role"]).lower() == "admin" else row.iloc[0]["role"]),
                     "sites": row.iloc[0]["sites"],
                     "tabs": row.iloc[0]["tabs"],
-                "can_raise": bool(row.iloc[0].get("can_raise", True)),
-                "can_view_registry": bool(row.iloc[0].get("can_view_registry", True)),
-                "can_export": bool(row.iloc[0].get("can_export", True)),
-                "can_email_drafts": bool(row.iloc[0].get("can_email_drafts", True)),
+                    "can_raise": bool(row.iloc[0].get("can_raise", True)),
+                    "can_view_registry": bool(row.iloc[0].get("can_view_registry", True)),
+                    "can_export": bool(row.iloc[0].get("can_export", True)),
+                    "can_email_drafts": bool(row.iloc[0].get("can_email_drafts", True)),
                 }
                 st.success(f"Signed in as {row.iloc[0]['name']} ({row.iloc[0]['role']})")
                 st.rerun()
             else:
                 st.error("Invalid credentials")
+
+    with st.sidebar.expander("Forgot password?", expanded=False):
+        reset_email = st.text_input("Email", key="rbac-reset-email")
+        if st.button("Send reset code", key="rbac-reset-send"):
+            _handle_password_reset_request(reset_email)
+
+    with st.sidebar.expander("Reset password", expanded=False):
+        reset_email_confirm = st.text_input("Email", key="rbac-reset-email-confirm")
+        reset_token = st.text_input("Reset token", key="rbac-reset-token")
+        reset_code = st.text_input("Reset code", key="rbac-reset-code")
+        new_pwd = st.text_input("New password", type="password", key="rbac-reset-new")
+        confirm_pwd = st.text_input("Confirm new password", type="password", key="rbac-reset-confirm")
+        if st.button("Apply reset", key="rbac-reset-apply"):
+            _handle_password_reset_submit(reset_email_confirm, reset_token, reset_code, new_pwd, confirm_pwd)
+
+    if is_logged_in:
+        with st.sidebar.expander("Change password", expanded=False):
+            current_pwd = st.text_input("Current password", type="password", key="rbac-change-current")
+            new_pwd = st.text_input("New password", type="password", key="rbac-change-new")
+            confirm_pwd = st.text_input("Confirm new password", type="password", key="rbac-change-confirm")
+            if st.button("Update password", key="rbac-change-apply"):
+                _handle_password_change(current_pwd, new_pwd, confirm_pwd)
 
     if "user" not in st.session_state:
         st.warning("Please sign in to use the app.")
