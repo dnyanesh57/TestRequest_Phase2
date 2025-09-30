@@ -88,41 +88,38 @@ except Exception:
     pass
 if not GITHUB_TOKEN:
     GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+def _ensure_once(flag: str, func, err_msg: str, level: str = "error") -> None:
+    if st.session_state.get(flag):
+        return
+    try:
+        func()
+    except Exception as exc:
+        if level == "warning":
+            st.warning(f"{err_msg}: {exc}")
+        else:
+            st.error(f"{err_msg}: {exc}")
+    finally:
+        st.session_state[flag] = True
+
+
 def brand_header():
     st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
     st.markdown('<hr class="brand" />', unsafe_allow_html=True) # Replace all occurrences of "ðŸ“‘" with "📊"
 
 
+
 # Ensure vendor email & mail-log tables exist
-try:
-    ensure_vendor_email_tables()
-except Exception as e:
-    st.error(f"DB init (vendor email tables) failed: {e}")
+_ensure_once("_vendor_tables_ready", ensure_vendor_email_tables, "DB init (vendor email tables) failed")
 
 # Ensure password reset table exists
-try:
-    ensure_password_reset_tables()
-except Exception as e:
-    st.error(f"DB init (password reset table) failed: {e}")
+_ensure_once("_password_reset_table_ready", ensure_password_reset_tables, "DB init (password reset table) failed")
 
 # Ensure approval recipient tables exist
-try:
-    ensure_approval_recipient_tables()
-except Exception as e:
-    st.error(f"DB init (approval recipients) failed: {e}")
+_ensure_once("_approval_tables_ready", ensure_approval_recipient_tables, "DB init (approval recipients) failed")
 
 # Ensure reqlog email columns exist
-try:
-    ensure_reqlog_email_columns()
-except Exception as e:
-    st.warning(f"Could not verify emailed_* columns on requirements_log: {e}")
-
-# Ensure approver recipients table exists
-try:
- ensure_approval_recipient_tables()
-except Exception as e:
- st.error(f"DB init (approval recipients) failed: {e}")
+_ensure_once("_reqlog_email_columns_ready", ensure_reqlog_email_columns, "Could not verify emailed_* columns on requirements_log", level="warning")
 
 # SMTP + mail helpers (add once, top-level)
 from email.mime.text import MIMEText
