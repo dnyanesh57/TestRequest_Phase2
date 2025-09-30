@@ -2537,7 +2537,21 @@ for i, tab_label in enumerate(visible_tabs):
                         line_key = str(row["Line_Key"])
                         uom = str(row.get("OD_UOM", ""))
                         stage = str(row.get("OD_Stage", ""))
-                        description = st.text_area("Description (free text allowed)", str(base_pvw[base_pvw["Line_Key"] == line_key]["OD_Description"].iloc[0]), height=100, key="rq-desc")
+                        desc_series = base_pvw.loc[base_pvw["Line_Key"] == line_key, "OD_Description"]
+                        if not desc_series.empty:
+                            raw_desc = desc_series.iloc[0]
+                            source_desc = "" if pd.isna(raw_desc) else str(raw_desc).strip()
+                        else:
+                            source_desc = ""
+                        if st.session_state.get("rq_last_selected_line") != line_key:
+                            st.session_state["rq-desc"] = source_desc
+                            st.session_state["rq_last_selected_line"] = line_key
+                        description = st.text_area(
+                            "Description (free text allowed)",
+                            value=st.session_state.get("rq-desc", source_desc),
+                            height=100,
+                            key="rq-desc",
+                        )
                         remaining = float(row.get("Remaining_Qty", 0.0))
                         qty = st.number_input(f"Quantity (Remaining {remaining:.2f})", min_value=0.0, value=0.0, step=1.0, key="rq-qty")
                         is_new_item = False
