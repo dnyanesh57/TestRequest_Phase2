@@ -667,16 +667,16 @@ def _handle_password_change(current_password: str, new_password: str, confirm_pa
     st.success("Password updated successfully.")
 
 def _format_line_label(row: pd.Series) -> str:
-    desc = str(row.get('OD_Description', ''))
-    short_desc = desc[:60]
-    if len(desc) > 60:
-        short_desc += '...'
+    desc = str(row.get('OD_Description', '')).strip().replace('\n', ' ')
+    desc = ' '.join(desc.split())
+    if not desc:
+        desc = 'No Description'
     line_key = str(row.get('Line_Key', ''))
     try:
         remaining = float(row.get('Remaining_Qty', 0.0) or 0.0)
     except Exception:
         remaining = 0.0
-    return f"Line {line_key} - {short_desc} (Rem: {remaining:.2f})"
+    return f"Line {line_key} - {desc} (Rem: {remaining:.2f})"
 
 
 
