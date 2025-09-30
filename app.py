@@ -2620,19 +2620,29 @@ for i, tab_label in enumerate(visible_tabs):
                         cart_df = pd.DataFrame(st.session_state.req_cart)
                         st.dataframe(cart_df, use_container_width=True, hide_index=True)
 
+                        needs_approval_now = any(bool(item.get("approval_required")) for item in st.session_state.req_cart)
                         cc1, cc2, cc3 = st.columns(3)
                         with cc1:
-                            if st.button("🗑️ Clear cart", key="rq-clear"):
+                            if st.button("dY-�,? Clear cart", key="rq-clear"):
                                 st.session_state.req_cart = []
                                 st.rerun()
-                        with cc2: # Removed vendor email checkbox from here
-                            pass
+                        with cc2:
+                            if needs_approval_now:
+                                email_approval_after = st.checkbox(
+                                    "Email approval list automatically",
+                                    value=st.session_state.get("rq-email-approver", True),
+                                    key="rq-email-approver",
+                                )
+                            else:
+                                email_approval_after = False
+                                if "rq-email-approver" in st.session_state:
+                                    st.session_state.pop("rq-email-approver")
                         with cc3:
                             # Email vendor after generating PDF
-                            email_vendor_after = st.checkbox("📧 Email vendor automatically after generating PDF", value=True, key="rq-email-vendor")
-                            gen_click = st.button("📄 Generate PDF & Log", type="primary", key="rq-gen")
-                       
+                            email_vendor_after = st.checkbox("dY", "Email vendor automatically after generating PDF", value=st.session_state.get("rq-email-vendor", True), key="rq-email-vendor")
+                            gen_click = st.button("dY", "Generate PDF & Log", type="primary", key="rq-gen")
                         if gen_click:
+                            approval_email_enabled = email_approval_after
                             pdf_bytes, updated_df, reused_map, used_rows = generate_pdf_and_log_lines(
                                 cart_entries=st.session_state.req_cart,
                                 user=st.session_state.user,
@@ -2659,37 +2669,55 @@ for i, tab_label in enumerate(visible_tabs):
                                     file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
                                     mime="application/pdf", key="rq-pdf")
                                 if reused_map:
-                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.") # Success message
+                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.")
 
-                                # NEW: clear guidance, no vendor email button here if approval is needed
-                                # Check the statuses of the generated rows:
-                                any_pending = any(str(r.get("status","")).startswith("Pending") for r in used_rows)
-                                all_sendable = all(_can_send_vendor_email(str(r.get("status",""))) for r in used_rows)
+                                # Decide post-generation emailing behaviour
+                                reused_refs = set(reused_map.values()) if reused_map else set()
+                                refs_generated = [
+                                    str(r.get("ref", "")).strip()
+                                    for r in used_rows
+                                    if str(r.get("ref", "")).strip() and r.get("ref") not in reused_refs
+                                ]
+
+                                any_pending = any(str(r.get("status", "")).startswith("Pending") for r in used_rows)
+                                all_sendable = all(_can_send_vendor_email(str(r.get("status", ""))) for r in used_rows)
+
+                                if any_pending and not approval_email_enabled and "rq-email-approver" not in st.session_state:
+                                    approval_email_enabled = True
 
                                 if any_pending:
-                                    st.info("Vendor email is disabled because one or more items need approval. Once approved, you’ll be able to email the vendor from ‘My Requests’ or ‘Requirements Registry’.")
+                                    if email_vendor_after and refs_generated:
+                                        st.info("Vendor email skipped because one or more items need approval. Email the vendor after approval from 'My Requests' or 'Requirements Registry'.")
                                 elif all_sendable:
-                                    st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
+                                    if email_vendor_after and refs_generated:
+                                        _send_vendor_emails_for_refs(refs_generated)
+                                    elif email_vendor_after and not refs_generated:
+                                        st.info("Vendor email skipped because no new references were generated.")
+                                    else:
+                                        st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
+                                    if not email_vendor_after:
+                                        st.info("Vendor email skipped; use 'My Requests' or 'Requirements Registry' to send it later.")
                                 else:
-                                    st.info("Some lines are not yet approved; vendor emailing will be available once they’re approved.")
+                                    st.info("Some lines are not yet approved; vendor emailing will be available once they're approved.")
                             else:
                                 st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
-
                             # --- Email approvers for rows that require approval ---
                             try: # Patch 1
                                 # Collect rows needing approval
-                                needing_approval = [r for r in used_rows if str(r.get("status","")).startswith("Pending")]
-                                if needing_approval:
+                                needing_approval = [r for r in used_rows if str(r.get("status", "")).startswith("Pending")]
+                                if needing_approval and not approval_email_enabled:
+                                    st.info("Approval email not sent because the approval-email checkbox is off.")
+                                elif needing_approval:
                                     # Use the first row for subject/attachment naming; include a summary of all pending lines in body
                                     first_row = needing_approval[0]
                                     pc = first_row.get("project_code")
                                     vk = first_row.get("vendor")
                                     rt = first_row.get("request_type")
                                     requester_name = first_row.get("generated_by_name", "Requester")
-                                    
+
                                     approver_emails = list_approver_emails(pc, vk, rt)
                                     if not approver_emails:
-                                        st.warning("No approval recipients configured for this scope. Add them in Admin → Approval Recipients.")
+                                        st.warning("No approval recipients configured for this scope. Add them in Admin > Approval Recipients.")
                                     else:
                                         # Build HTML summary for all pending lines
                                         rows_html = "".join(
@@ -2723,12 +2751,12 @@ for i, tab_label in enumerate(visible_tabs):
                                         </div>
                                         """
 
-                                        subject = f"[SJCPL] Approval needed — {first_row.get('project_code','')} — {len(needing_approval)} item(s) — by {requester_name}"
+                                        subject = f"[SJCPL] Approval needed - {first_row.get('project_code','')} - {len(needing_approval)} item(s) - by {requester_name}"
                                         attach_name = f"{first_row['ref'].split('/')[1]}_PendingApproval.pdf" if first_row.get("ref") else "PendingApproval.pdf"
 
                                         # Reuse the combined PDF you just created
                                         ok_mail, msg_mail = send_email_via_smtp(
-                                            ",".join(approver_emails),  # or loop and send individually if your SMTP doesn’t accept multiple recipients
+                                            ",".join(approver_emails),  # or loop and send individually if your SMTP doesn't accept multiple recipients
                                             subject, html_body, pdf_bytes, attach_name
                                         )
 
@@ -2743,7 +2771,123 @@ for i, tab_label in enumerate(visible_tabs):
                                             st.success(f"Sent approval email to: {', '.join(approver_emails)}")
                                         else:
                                             st.error(f"Approval email failed: {msg_mail}")
-                                        
+                                else:
+                                    pass
+                            except Exception as e:
+                                    st.error(f"Failed to upsert requirements: {e}")
+                            else:
+                                st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
+
+                            if pdf_bytes and used_rows:
+                                first_entry = used_rows[0]
+                                st.download_button("Download Requirements PDF", data=pdf_bytes,
+                                    file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
+                                    mime="application/pdf", key="rq-pdf")
+                                if reused_map:
+                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.")
+
+                                # Decide post-generation emailing behaviour
+                                reused_refs = set(reused_map.values()) if reused_map else set()
+                                refs_generated = [
+                                    str(r.get("ref", "")).strip()
+                                    for r in used_rows
+                                    if str(r.get("ref", "")).strip() and r.get("ref") not in reused_refs
+                                ]
+
+                                any_pending = any(str(r.get("status", "")).startswith("Pending") for r in used_rows)
+                                all_sendable = all(_can_send_vendor_email(str(r.get("status", ""))) for r in used_rows)
+
+                                if any_pending and not approval_email_enabled and "rq-email-approver" not in st.session_state:
+                                    approval_email_enabled = True
+
+                                if any_pending:
+                                    if email_vendor_after and refs_generated:
+                                        st.info("Vendor email skipped because one or more items need approval. Email the vendor after approval from 'My Requests' or 'Requirements Registry'.")
+                                elif all_sendable:
+                                    if email_vendor_after and refs_generated:
+                                        _send_vendor_emails_for_refs(refs_generated)
+                                    elif email_vendor_after and not refs_generated:
+                                        st.info("Vendor email skipped because no new references were generated.")
+                                    else:
+                                        st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
+                                    if not email_vendor_after:
+                                        st.info("Vendor email skipped; use 'My Requests' or 'Requirements Registry' to send it later.")
+                                else:
+                                    st.info("Some lines are not yet approved; vendor emailing will be available once they're approved.")
+                            else:
+                                st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
+                            # --- Email approvers for rows that require approval ---
+                            try: # Patch 1
+                                # Collect rows needing approval
+                                needing_approval = [r for r in used_rows if str(r.get("status", "")).startswith("Pending")]
+                                if needing_approval and not approval_email_enabled:
+                                    st.info("Approval email not sent because the approval-email checkbox is off.")
+                                elif needing_approval:
+                                    # Use the first row for subject/attachment naming; include a summary of all pending lines in body
+                                    first_row = needing_approval[0]
+                                    pc = first_row.get("project_code")
+                                    vk = first_row.get("vendor")
+                                    rt = first_row.get("request_type")
+                                    requester_name = first_row.get("generated_by_name", "Requester")
+
+                                    approver_emails = list_approver_emails(pc, vk, rt)
+                                    if not approver_emails:
+                                        st.warning("No approval recipients configured for this scope. Add them in Admin > Approval Recipients.")
+                                    else:
+                                        # Build HTML summary for all pending lines
+                                        rows_html = "".join(
+                                            f"<tr><td style='padding:6px 8px'>{r.get('ref','')}</td>"
+                                            f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
+                                            f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
+                                            f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
+                                            f"<td style='padding:6px 8px'>{r.get('description','')}</td>"
+                                            f"<td style='padding:6px 8px'>{r.get('qty','')} {r.get('uom','')}</td>"
+                                            f"<td style='padding:6px 8px'>{r.get('status_detail','')}</td></tr>"
+                                            for r in needing_approval
+                                        )
+                                        html_body = f"""
+                                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222"> 
+                                          <p>Approval required for the following request(s):</p>
+                                          <table style="border-collapse:collapse;font-size:13px">
+                                            <thead>
+                                              <tr style="background:#f0f0f0">
+                                                <th style="padding:6px 8px;text-align:left">Ref</th>
+                                                <th style="padding:6px 8px;text-align:left">Project</th>
+                                                <th style="padding:6px 8px;text-align:left">Vendor</th>
+                                                <th style="padding:6px 8px;text-align:left">Type</th>
+                                                <th style="padding:6px 8px;text-align:left">Item</th>
+                                                <th style="padding:6px 8px;text-align:left">Qty</th>
+                                                <th style="padding:6px 8px;text-align:left">Reason</th>
+                                              </tr>
+                                            </thead>
+                                            <tbody>{rows_html}</tbody>
+                                          </table>
+                                          <p>Attached: combined PDF generated by the system.</p>
+                                        </div>
+                                        """
+
+                                        subject = f"[SJCPL] Approval needed - {first_row.get('project_code','')} - {len(needing_approval)} item(s) - by {requester_name}"
+                                        attach_name = f"{first_row['ref'].split('/')[1]}_PendingApproval.pdf" if first_row.get("ref") else "PendingApproval.pdf"
+
+                                        # Reuse the combined PDF you just created
+                                        ok_mail, msg_mail = send_email_via_smtp(
+                                            ",".join(approver_emails),  # or loop and send individually if your SMTP doesn't accept multiple recipients
+                                            subject, html_body, pdf_bytes, attach_name
+                                        )
+
+                                        # Log each recipient (optional, if you added a mail log function)
+                                        try:
+                                            for em in approver_emails:
+                                                log_requirement_email(first_row.get("ref",""), vk, em, subject, ok_mail, (None if ok_mail else msg_mail))
+                                        except Exception:
+                                            pass
+
+                                        if ok_mail:
+                                            st.success(f"Sent approval email to: {', '.join(approver_emails)}")
+                                        else:
+                                            st.error(f"Approval email failed: {msg_mail}")
+                                else:
+                                    pass
                             except Exception as e:
                                 st.error(f"Error while sending approval email: {e}") # Patch 1
         elif tab_label == "My Requests":
