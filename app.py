@@ -666,6 +666,20 @@ def _handle_password_change(current_password: str, new_password: str, confirm_pa
     _refresh_acl_from_source()
     st.success("Password updated successfully.")
 
+def _format_line_label(row: pd.Series) -> str:
+    desc = str(row.get('OD_Description', ''))
+    short_desc = desc[:60]
+    if len(desc) > 60:
+        short_desc += '...'
+    line_key = str(row.get('Line_Key', ''))
+    try:
+        remaining = float(row.get('Remaining_Qty', 0.0) or 0.0)
+    except Exception:
+        remaining = 0.0
+    return f"Line {line_key} - {short_desc} (Rem: {remaining:.2f})"
+
+
+
 
 def _build_width_map(header_cols: list[str]) -> dict[str,int]:
     return {c: _col_width(c) for c in header_cols}
@@ -1938,7 +1952,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
             f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
             f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
             f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
-            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('…' if len(str(r.get('description',''))) > 80 else ''))}</td>"
+            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('...' if len(str(r.get('description',''))) > 80 else ''))}</td>"
             f"<td style='padding:6px 8px; text-align:right'>{r.get('qty','')} {r.get('uom','')}</td>"
             f"<td style='padding:6px 8px'>{_chip(r.get('status'))}</td>"
             f"<td style='padding:6px 8px'>{r.get('approver','')}</td>"
@@ -2136,7 +2150,7 @@ def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_m
     if not sel_ref:
         return
     row = df_filtered[df_filtered["ref"] == sel_ref].head(1).to_dict(orient="records")[0]
-    with st.expander(f"ðŸ”Ž Preview — {sel_ref}", expanded=True):
+    with st.expander(f"ðŸ”Ž Preview - {sel_ref}", expanded=True):
         html = requirement_row_to_html(row, company_meta)
         st.markdown(html, unsafe_allow_html=True)
     if st.button("ðŸ–¨ï¸ Build PDF for this Reference", key="reg-view-print"):
@@ -2424,7 +2438,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} - Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ov", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
         elif tab_label == "Group: WO â†’ Project":
@@ -2449,7 +2463,7 @@ for i, tab_label in enumerate(visible_tabs):
                     view = view[view["Subcontractor_Key"].isin(sel)].copy()
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} - Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="gp", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 ) # usage: paginated_df(view[inner_cols], key="gp")
         elif tab_label == "Work Order Explorer":
@@ -2477,7 +2491,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} - Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ex", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
                 if not submitted:
@@ -2631,7 +2645,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} - Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="as", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
                 submitted = st.form_submit_button("Apply")
@@ -2773,7 +2787,7 @@ for i, tab_label in enumerate(visible_tabs):
                         if line_pairs.empty:
                             st.warning("No line items found under the selected Project/Vendor/WO.")
                             st.stop()
-                        line_pairs["label"] = line_pairs.apply(lambda r: f"Line {r['Line_Key']} â€” {str(r['OD_Description'])[:60]}â€¦ (Rem: {r['Remaining_Qty']:.2f})", axis=1)
+                        line_pairs["label"] = line_pairs.apply(_format_line_label, axis=1)
                         pick_label = st.selectbox("Select Line", line_pairs["label"].tolist(), key="rq-line-lab")
                         row = line_pairs[line_pairs["label"] == pick_label].iloc[0]
                         line_key = str(row["Line_Key"])
@@ -3226,7 +3240,7 @@ for i, tab_label in enumerate(visible_tabs):
                         st.rerun()
         elif tab_label == "Admin":
             if can_view("Admin") and _user_is_master_admin():
-                st.subheader("Admin  —  Users & Access")
+                st.subheader("Admin  -  Users & Access")
                 _ensure_acl_in_state()
                 st.dataframe(st.session_state.acl_df, use_container_width=True, hide_index=True)
 
