@@ -1,5 +1,5 @@
-# wo_phase2_dashboard_sjcpl.py
-# SJCPL — Work Order Dashboard (Phase 1 + Phase 2) — Integrated Engine
+﻿# wo_phase2_dashboard_sjcpl.py
+# SJCPL â€” Work Order Dashboard (Phase 1 + Phase 2) â€” Integrated Engine
 # Final, Complete, and Functional Version
 from __future__ import annotations
 import io, os, uuid, hmac, hashlib, json, base64,requests
@@ -46,11 +46,11 @@ from email.mime.multipart import MIMEMultipart
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, Image as RLImage
 
 # ----------------------------- Brand / Theme -----------------------------
-APP_TITLE = "SJCPL — Test Request and Approval V1"
+APP_TITLE = "SJCPL - Test Request and Approval V1"
 BRAND_BLUE = "#00AEDA"; BRAND_BLACK = "#000000"; BRAND_GREY = "#939598"; BRAND_WHITE = "#FFFFFF"
 PLOTLY_COLORS = [BRAND_BLUE, BRAND_BLACK, BRAND_GREY, "#146C94", "#4A4A4A"]
 
-st.set_page_config(page_title=APP_TITLE, page_icon="📑", layout="wide")
+st.set_page_config(page_title=APP_TITLE, page_icon="ðŸ“‘", layout="wide")
 pd.options.mode.copy_on_write = True
 px.defaults.template = "plotly_white"; px.defaults.color_discrete_sequence = PLOTLY_COLORS
 
@@ -181,7 +181,7 @@ def build_vendor_email_html(row: dict) -> str:
         <tr><td style="padding:4px 8px"><b>Generated</b></td><td style="padding:4px 8px">{dt_gen}</td></tr>
       </table>
       <p>Please review the attached PDF for full details.</p>
-      <p>Regards,<br/>SJCPL — Test Request and Approval</p>
+      <p>Regards,<br/>SJCPL - Test Request and Approval</p>
     </div>
     """
 
@@ -198,7 +198,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
     if not ok:
         return False, "SMTP is not configured. Add [smtp] to .streamlit/secrets.toml (host, port, user, password, from_email)."
 
-    # Gmail sanity check (common source of ‘connection closed’ during auth)
+    # Gmail sanity check (common source of â€˜connection closedâ€™ during auth)
     if "gmail.com" in (cfg["host"] or "").lower():
         # App Password (not account password) is required if 2FA is on, and FROM must match USER.
         if cfg["from_email"].lower() != cfg["user"].lower():
@@ -239,7 +239,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
             # Compose helpful message
             hint = []
             if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower():
-                hint.append("Network timeout—your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
+                hint.append("Network timeoutâ€”your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
             if "gmail" in (cfg["host"] or "").lower():
                 hint.append("For Gmail: use an App Password, and set from_email == user.")
             return False, f"{type(e2).__name__}: {e2}. Prior: {type(last_err).__name__}: {last_err}. " + (" ".join(hint) if hint else "")
@@ -278,7 +278,7 @@ COMPANY_DEFAULT = {
     "name": "SJ Contracts Pvt Ltd",
     "address_lines": [
         "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park",
-        "Baner Road, Opp. Sadanand Hotel, Baner, Pune – 411045"
+        "Baner Road, Opp. Sadanand Hotel, Baner, Pune â€“ 411045"
     ]
 }
 _NUMERIC_COLS = {"Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"}
@@ -536,7 +536,7 @@ def pdf_grouped_lines(
     )
     story = []; styles = _styles()
 
-    story.append(Paragraph(f"SJCPL — Work Order Report {title_suffix}".strip(), styles["BrandTitle"]))
+    story.append(Paragraph(f"SJCPL â€” Work Order Report {title_suffix}".strip(), styles["BrandTitle"]))
     story.append(Paragraph(
         "Tables are wrapped to fit the page width. If columns exceed the page, the table is split into parts, "
         "repeating Line # and Description. Low cells are shown in red.", styles["Small"]))
@@ -553,7 +553,7 @@ def pdf_grouped_lines(
             lines = int(dwo.get("Line_Key").nunique()) if "Line_Key" in dwo.columns else len(dwo)
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             story.append(Paragraph(
-                f"WO: {wo}  —  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
+                f"WO: {wo}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
                 f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}",
                 styles["Small"]
             ))
@@ -574,7 +574,7 @@ def pdf_grouped_lines(
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             proj = str(dwo["Project_Key"].iloc[0]) if "Project_Key" in dwo.columns and len(dwo)>0 else ""
             story.append(Paragraph(
-                f"WO: {wo}  —  Project: {proj}  —  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
+                f"WO: {wo}  â€”  Project: {proj}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
                 f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}",
                 styles["Small"]
             ))
@@ -605,7 +605,7 @@ def _ensure_reqlog_in_state():
 
 def _load_enabled_tabs():
     t = read_enabled_tabs()
-    return t if t else ["Overview","Group: WO → Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
+    return t if t else ["Overview","Group: WO â†’ Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
 
 def _save_enabled_tabs(lst):
     write_enabled_tabs(lst)
@@ -616,7 +616,7 @@ if "enabled_tabs" not in st.session_state:
 def _login_block():
     _ensure_acl_in_state()
     is_logged_in = "user" in st.session_state
-    with st.sidebar.expander("🔐 Login", expanded=not is_logged_in):
+    with st.sidebar.expander("ðŸ” Login", expanded=not is_logged_in):
         emails = sorted(st.session_state.acl_df["email"].unique().tolist())
         email = st.selectbox("User", emails, index=0 if emails else None, key="rbac-email")
         pwd = st.text_input("Password", type="password", key="rbac-pwd")
@@ -761,7 +761,7 @@ def annotate_low(df: pd.DataFrame, metric: str, threshold: float) -> pd.DataFram
     df = df.copy()
     if metric not in df.columns: df[metric] = np.nan
     df["Low_Flag"] = df[metric] < threshold
-    df["Low_Tag"]  = np.where(df["Low_Flag"], "🔴 Low", "")
+    df["Low_Tag"]  = np.where(df["Low_Flag"], "ðŸ”´ Low", "")
     return df
 _PAGE_SIZE = landscape(A4)
 _MARGINS = dict(left=18, right=18, top=18, bottom=18)
@@ -944,7 +944,7 @@ def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd
 
 # ---------------------- Load ----------------------
 # 1) Stop hitting GitHub on every rerun
-# Only fetch from GitHub when the admin presses a button; otherwise reuse what’s already loaded.
+# Only fetch from GitHub when the admin presses a button; otherwise reuse whatâ€™s already loaded.
 # after login/bootstrap:
 if "_raw_df_cache" not in st.session_state:
     st.session_state._raw_df_cache = None
@@ -1280,7 +1280,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         # minimal HTML escaping for reportlab paragraphs
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def _to_text(v, dash="—") -> str:
+    def _to_text(v, dash="â€”") -> str:
         if _is_nanlike(v):
             return dash
         try:
@@ -1354,7 +1354,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             _dt_fmt = pd.to_datetime(_dt_raw)
             gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14
         except Exception:
-            gen_at_fmt = _dt_raw if _dt_raw != "—" else "—"
+            gen_at_fmt = _dt_raw if _dt_raw != "â€”" else "â€”"
 
         dt_by_html = (
             f"<b>Date &amp; Time:</b> {_esc(gen_at_fmt)}"
@@ -1408,7 +1408,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         try:
             d = pd.to_datetime(p.get("generated_at")).strftime("%d-%m-%Y")
         except Exception:
-            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "—" else "—"
+            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "â€”" else "â€”"
 
         # Escape description and stage
         desc = _esc(_to_text(p.get("description")))
@@ -1416,7 +1416,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         item_desc_text = f"{desc} <br/> (Stage: {stage})"
 
         qty_val = _coerce_float(p.get("qty", ""))
-        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "—"
+        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "â€”"
 
         row_data = [
             "1",
@@ -1594,7 +1594,7 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
         key=f"{key_prefix}-refs"
     )
 
-    if refs and st.button("🖨️ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
+    if refs and st.button("ðŸ–¨ï¸ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
         rows = df_filtered[df_filtered["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
         pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta)
         st.download_button(
@@ -1683,7 +1683,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
             f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
             f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
             f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
-            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('…' if len(str(r.get('description',''))) > 80 else ''))}</td>"
+            f"<td style='padding:6px 8px'>{(str(r.get('description',''))[:80] + ('â€¦' if len(str(r.get('description',''))) > 80 else ''))}</td>"
             f"<td style='padding:6px 8px; text-align:right'>{r.get('qty','')} {r.get('uom','')}</td>"
             f"<td style='padding:6px 8px'>{_chip(r.get('status'))}</td>"
             f"<td style='padding:6px 8px'>{r.get('approver','')}</td>"
@@ -1717,7 +1717,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
 
     # Export current view
     st.download_button(
-        "⬇️ Download my request log (CSV)",
+        "â¬‡ï¸ Download my request log (CSV)",
         data=view[show].to_csv(index=False).encode("utf-8"),
         file_name="my_requests_log.csv",
         mime="text/csv",
@@ -1726,7 +1726,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
 
     # ---------- Send Email to Vendor (Approved only) ----------
     st.markdown("---")
-    with st.expander("📧 Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
+    with st.expander("ðŸ“§ Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
         sendable_refs = view[view["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
         if not sendable_refs:
             st.caption("No Approved / Auto Approved requests in the current list.")
@@ -1743,30 +1743,28 @@ def _send_vendor_emails_for_refs(refs: list[str]):
         st.warning("Pick at least one reference.")
         return
 
-    # Load rows and ensure all are sendable
     try:
         rows = read_requirements_by_refs(refs)
     except Exception as e:
         st.error(f"Could not load selected refs: {e}")
         return
 
-    not_sendable = [r["ref"] for r in rows if not _can_send_vendor_email(str(r.get("status","")))]
+    not_sendable = [r["ref"] for r in rows if not _can_send_vendor_email(str(r.get("status", "")))]
     if not_sendable:
         st.error("Vendor emailing is allowed only for Approved / Auto Approved items. These are not allowed: " + ", ".join(not_sendable))
         return
 
-    # Build one combined PDF for the selected refs
     try:
         pdf_bytes = build_requirement_pdf_from_rows(rows, st.session_state.company_meta)
     except Exception as e:
         st.error(f"PDF build failed: {e}")
         return
 
-    # Send one email per vendor (group)
     from collections import defaultdict
-    by_vendor = defaultdict(list)
-    for r in rows:
-        by_vendor[str(r.get("vendor",""))].append(r)
+
+    by_vendor: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        by_vendor[str(row.get("vendor", ""))].append(row)
 
     sent_ok, sent_err = 0, []
     for vendor_key, bucket in by_vendor.items():
@@ -1774,52 +1772,41 @@ def _send_vendor_emails_for_refs(refs: list[str]):
         try:
             v_email = get_vendor_email(vendor_key)
             if not v_email:
-                st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
+                st.warning(f"No vendor email configured for: {vendor_key}. (Admin > Vendor Contacts)")
                 continue
 
-            subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
-            body_rows = "".join(
-                f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
-                f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
-                f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
-                for r in bucket
-            )
-            html_body = f"""
-            <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
-              <p>The following request(s) have been <b>Approved</b>:</p>
-              <table style="border-collapse:collapse;font-size:13px">
-                <thead><tr style="background:#f0f0f0">
-                  <th style="padding:4px 8px;text-align:left">Ref</th>
-                  <th style="padding:4px 8px;text-align:left">Item</th>
-                  <th style="padding:4px 8px;text-align:left">Qty</th>
-                </tr></thead>
-                <tbody>{body_rows}</tbody>
-              </table>
-              <p>Attached: approved request PDF.</p>
-            </div>
-            """
-            attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
-
-            ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
+            subject = f"[SJCPL] Approved - {bucket[0].get('project_code', '')} - {len(bucket)} item(s)"
             try:
-                log_requirement_email(bucket[0].get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
+                sections = [build_vendor_email_html(r) for r in bucket]
+                html_body = "<hr style='margin:16px 0;border:none;border-top:1px solid #e0e0e0;'/>".join(sections)
+            except Exception:
+                html_body = build_vendor_email_html(bucket[0])
+
+            attach_name = f"Approved_{bucket[0].get('project_code', '') or 'Request'}.pdf"
+            ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, pdf_bytes, attach_name)
+
+            try:
+                log_requirement_email(bucket[0].get("ref", ""), vendor_key, v_email, subject, ok_mail, None if ok_mail else msg_mail)
             except Exception:
                 pass
 
             if ok_mail:
                 sent_ok += 1
             else:
-                sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
-
+                sent_err.append(f"{vendor_key} -> {v_email}: {msg_mail}")
         except Exception as e:
-            sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
+            sent_err.append(f"{vendor_key} -> {v_email or '-'}: {e}")
             continue
 
     if sent_ok:
         st.success(f"Emailed vendor(s) for {sent_ok} group(s).")
-        # Mark only the successfully emailed refs
-        emailed_refs = [r["ref"] for r in rows if _can_send_vendor_email(str(r.get("status","")))]
-        mark_vendor_emailed(emailed_refs, st.session_state.user.get("email",""))
+        emailed_refs = [
+            r["ref"]
+            for r in rows
+            if _can_send_vendor_email(str(r.get("status", "")))
+        ]
+        mark_vendor_emailed(emailed_refs, st.session_state.user.get("email", ""))
+
     if sent_err:
         st.error("Some vendor emails failed: " + "; ".join(sent_err))
 
@@ -1872,9 +1859,9 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
         <td style="padding:6px;border:1px solid #ccc">{d}</td>
         <td style="padding:6px;border:1px solid #ccc">{(r.get('description') or '')} (UOM: {(r.get('uom') or '')}; Stage: {(r.get('stage') or '')})</td>
         <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or '—'}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or '—'}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or '—'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or 'â€”'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or 'â€”'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or 'â€”'}</td>
       </tr>
     </tbody>
   </table>
@@ -1894,10 +1881,10 @@ def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_m
     if not sel_ref:
         return
     row = df_filtered[df_filtered["ref"] == sel_ref].head(1).to_dict(orient="records")[0]
-    with st.expander(f"🔎 Preview — {sel_ref}", expanded=True):
+    with st.expander(f"ðŸ”Ž Preview â€” {sel_ref}", expanded=True):
         html = requirement_row_to_html(row, company_meta)
         st.markdown(html, unsafe_allow_html=True)
-    if st.button("🖨️ Build PDF for this Reference", key="reg-view-print"):
+    if st.button("ðŸ–¨ï¸ Build PDF for this Reference", key="reg-view-print"):
         pdf_bytes = build_requirement_pdf_from_rows([row], company_meta)
         st.download_button("Download PDF (this ref)", data=pdf_bytes, file_name=f"{sel_ref.replace('/','_')}.pdf", mime="application/pdf", key="reg-view-print-dl")
 
@@ -1905,7 +1892,7 @@ def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.Data
     st.markdown("### Admin Tools")
     c1, c2 = st.columns([1,1])
     with c1:
-        if st.button("🔁 Run Post-CSV Auto-Approval sweep"):
+        if st.button("ðŸ” Run Post-CSV Auto-Approval sweep"):
             upd, n = run_post_csv_auto_approvals(reqlog_df, items_df)
             save_cb(upd)
             st.success(f"Auto-approved {n} record(s) where stock is now available.")
@@ -1926,7 +1913,7 @@ if "app_settings" not in st.session_state:
 _ensure_reqlog_in_state()
 _login_block()
 
-# Sidebar — Upload + Display + Branding
+# Sidebar â€” Upload + Display + Branding
 with st.sidebar:
     st.header("Data Source")
 
@@ -1947,7 +1934,7 @@ with st.sidebar:
     else:
         # Non-admins are locked to GitHub
         st.write("Using: **GitHub**")
-        st.caption(f"{S['github_repo']} — {S['github_branch']} — /{S['github_folder']}")
+        st.caption(f"{S['github_repo']} â€” {S['github_branch']} â€” /{S['github_folder']}")
         S["data_source"] = "github"
 
     st.markdown("---")
@@ -1981,7 +1968,7 @@ with st.sidebar:
     low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr")
 
 if _user_is_master_admin():
-    with st.sidebar.expander("🏷️ Company & Branding (Admin)"):
+    with st.sidebar.expander("ðŸ·ï¸ Company & Branding (Admin)"):
         name = st.text_input("Company Name", st.session_state.company_meta["name"])
         addr1 = st.text_input("Address line 1", st.session_state.company_meta["address_lines"][0])
         addr2 = st.text_input("Address line 2", st.session_state.company_meta["address_lines"][1])
@@ -1989,7 +1976,7 @@ if _user_is_master_admin():
         if st.button("Apply", key="company-apply"):
             st.session_state.company_meta = {"name":name,"address_lines":[addr1,addr2], "logo_path_or_url": logo_path}
             st.success("Brand details applied.")
-    with st.sidebar.expander("⚙️ Data Source (Admin)", expanded=False):
+    with st.sidebar.expander("âš™ï¸ Data Source (Admin)", expanded=False):
         S = st.session_state.app_settings
         use_gh = st.checkbox("Use GitHub as the ONLY data source", value=S.get("use_github", True), key="adm-use-gh")
         repo   = st.text_input("Repo (owner/repo)", value=S.get("github_repo","dnyanesh57/NC_Dashboard"), key="adm-gh-repo")
@@ -2002,7 +1989,7 @@ if _user_is_master_admin():
             st.session_state.app_settings = read_app_settings()
             st.success("Data source settings saved.")
             st.rerun()
-    with st.sidebar.expander("🔎 GitHub Diagnostics", expanded=False):
+    with st.sidebar.expander("ðŸ”Ž GitHub Diagnostics", expanded=False):
         S = st.session_state.app_settings
         if st.button("Test GitHub connection", key="gh-test"):
             try:
@@ -2023,7 +2010,7 @@ if _user_is_master_admin():
 if S["data_source"] == "github":
     c1, c2 = st.columns([1,1])
     with c1:
-        reload_gh = st.button("🔄 Reload from GitHub", key="gh-reload")
+        reload_gh = st.button("ðŸ”„ Reload from GitHub", key="gh-reload")
     with c2:
         st.caption(st.session_state._raw_df_meta or "No file loaded yet.")
 
@@ -2053,7 +2040,7 @@ wos      = sorted([w for w in items_df["WO_Key"].dropna().unique()])
 if _user_is_master_admin() or _user_is_site_admin():
     c1, c2, c3 = st.columns([1.2,1.2,1.2])
     with c1: f_projects = st.multiselect("Project(s)", projects, default=projects, key="f_proj")
-    with c2: f_subs     = st.multiselect("Vendor(s) — Global", subs, default=subs, key="f_sub")
+    with c2: f_subs     = st.multiselect("Vendor(s) â€” Global", subs, default=subs, key="f_sub")
     with c3: f_wos      = st.multiselect("Work Order(s)", wos, default=[], key="f_wo")
 else:
     user_sites = _user_allowed_sites()
@@ -2089,7 +2076,7 @@ LINE_COLS_BASE = [
 ]
 
 all_tab_names = [
-    "Overview", "Group: WO → Project", "Work Order Explorer", "Lifecycle",
+    "Overview", "Group: WO â†’ Project", "Work Order Explorer", "Lifecycle",
     "Subcontractor Summary", "Browse", "Status as on Date", "Export", "Email Drafts", "Diagnostics",
     "Raise Requirement", "My Requests", "Requirements Registry", "Admin"
 ]
@@ -2132,7 +2119,7 @@ def render_grouped_lines(
         return
 
     for g1_val, df_g1 in df.groupby(g1, dropna=False):
-        with st.expander(f"{g1.replace('_',' ')}: {g1_val if pd.notna(g1_val) else '—'}", expanded=False):
+        with st.expander(f"{g1.replace('_',' ')}: {g1_val if pd.notna(g1_val) else 'â€”'}", expanded=False):
             for g2_val, df_g2 in df_g1.groupby(g2, dropna=False):
                 header = _header_text(g1_val, g2_val, df_g2)
                 st.markdown(f"**{header}**")
@@ -2150,20 +2137,20 @@ for i, tab_label in enumerate(visible_tabs):
                 m2.metric("Vendors", items_f["Subcontractor_Key"].nunique())
                 m3.metric("Work Orders", s["WO_Key"].nunique() if not s.empty else 0)
                 m4.metric("Lines (Items)", items_f["Line_Key"].nunique())
-                m5.metric("Σ Revised", f"{float(s['Revised_Qty'].sum() if not s.empty else 0):,.2f}")
+                m5.metric("Î£ Revised", f"{float(s['Revised_Qty'].sum() if not s.empty else 0):,.2f}")
                 m6.metric("Low items", int(items_f["Low_Flag"].sum() if "Low_Flag" in items_f.columns else 0))
 
                 if not proj_agg.empty:
                     st.subheader("Project-wise Quantities")
                     fig = px.bar(proj_agg.melt(id_vars="Project_Key", var_name="Kind", value_name="Qty"),
                                  x="Project_Key", y="Qty", color="Kind", barmode="group",
-                                 title="Σ Quantities by Project")
+                                 title="Î£ Quantities by Project")
                     fig.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig, use_container_width=True, key="ov-bar")
                 else:
                     st.info("No project data to display.")
 
 
-                st.subheader("Grouped Lines — Project → Work Order")
+                st.subheader("Grouped Lines â€” Project â†’ Work Order")
                 q = st.text_input("Search (WO / Desc / Stage)", "", key="ov-q").strip().lower()
                 cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty"]
                 cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols")
@@ -2182,14 +2169,14 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} â€” Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ov", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
-        elif tab_label == "Group: WO → Project":
+        elif tab_label == "Group: WO â†’ Project":
             # 3) Debounce text inputs (they cause a rerun on each keystroke)
             # Wrap search fields into forms so they rerun only on submit.
-            if can_view("Group: WO → Project"):
-                st.subheader("Grouped Lines — Project → Work Order")
+            if can_view("Group: WO â†’ Project"):
+                st.subheader("Grouped Lines â€” Project â†’ Work Order")
                 with st.form("group-wo-project-search"):
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="gp-q")
                     submitted = st.form_submit_button("Apply")
@@ -2207,12 +2194,12 @@ for i, tab_label in enumerate(visible_tabs):
                     view = view[view["Subcontractor_Key"].isin(sel)].copy()
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} â€” Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="gp", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 ) # usage: paginated_df(view[inner_cols], key="gp")
         elif tab_label == "Work Order Explorer":
             if can_view("Work Order Explorer"):
-                st.subheader("Explorer — Grouped Lines (Project → Work Order)")
+                st.subheader("Explorer â€” Grouped Lines (Project â†’ Work Order)")
                 with st.form("work-order-explorer-search"):
                     q = st.text_input("Search (WO / Title / Desc / UOM / Stage)", "", key="ex-q")
                     submitted = st.form_submit_button("Apply")
@@ -2235,7 +2222,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ex", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
                 if not submitted:
@@ -2302,7 +2289,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"Approval: {r.get('II_Approval Status','')}")
                                     st.write(f"WO Date: {str(r.get('OI_Date',''))}  |  II Date: {str(r.get('II_Date.1',''))}")
 
-                                wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
+                                wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (âˆ’)","Remaining"],
                                                       "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
                                 fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
                                 fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
@@ -2317,10 +2304,10 @@ for i, tab_label in enumerate(visible_tabs):
                     sub_agg = summary_f.groupby("Subcontractor_Key", dropna=False)[["Initial_Qty","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
                     fig2 = px.bar(sub_agg.melt(id_vars="Subcontractor_Key", var_name="Kind", value_name="Qty"),
                                   x="Subcontractor_Key", y="Qty", color="Kind", barmode="group",
-                                  title="Σ Quantities by Vendor")
+                                  title="Î£ Quantities by Vendor")
                     fig2.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig2, use_container_width=True, key="sub-bar")
 
-                    st.subheader("Grouped Lines — Vendor → Work Order") # type: ignore
+                    st.subheader("Grouped Lines â€” Vendor â†’ Work Order") # type: ignore
                 with st.form("subcontractor-summary-search"):
 
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="sub-q").strip().lower()
@@ -2342,7 +2329,7 @@ for i, tab_label in enumerate(visible_tabs):
                     render_grouped_lines(
                         view.sort_values(["Subcontractor_Key","WO_Key","Line_Key"]),
                         ("Subcontractor_Key","WO_Key"), cols_pick,
-                        title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                        title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                         key_prefix="sub", suppress_outer=False, thr_text=f"{low_threshold:g}"
                     )
                 submitted = st.form_submit_button("Apply")
@@ -2357,7 +2344,7 @@ for i, tab_label in enumerate(visible_tabs):
                 st.dataframe(prev.head(200), use_container_width=True, hide_index=True)
         elif tab_label == "Status as on Date":
             if can_view("Status as on Date"):
-                st.subheader("Status as on Date — Grouped Lines (Project → Work Order)")
+                st.subheader("Status as on Date â€” Grouped Lines (Project â†’ Work Order)")
                 as_on_date = st.date_input("Select date", pd.Timestamp.today().date(), key="as-on-date")
                 as_on_ts = pd.Timestamp(as_on_date)
                 view = items_f[(items_f["OI_Date"].notna()) & (items_f["OI_Date"] <= as_on_ts)].copy() if "OI_Date" in items_f.columns else items_f.copy()
@@ -2384,19 +2371,19 @@ for i, tab_label in enumerate(visible_tabs):
 
                 init, rmc, rev, used, rem, lines, low = group_totals(view)
                 cA, cB, cC, cD, cE = st.columns(5)
-                cA.metric("Active WOs (≤ date)", view["WO_Key"].nunique()); cB.metric("Active Lines", lines)
-                cC.metric("Σ Revised (current)", f"{rev:,.2f}"); cD.metric("Σ Used (current)", f"{used:,.2f}"); cE.metric("Σ Remaining (current)", f"{rem:,.2f}")
+                cA.metric("Active WOs (â‰¤ date)", view["WO_Key"].nunique()); cB.metric("Active Lines", lines)
+                cC.metric("Î£ Revised (current)", f"{rev:,.2f}"); cD.metric("Î£ Used (current)", f"{used:,.2f}"); cE.metric("Î£ Remaining (current)", f"{rem:,.2f}")
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
-                    title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                    title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="as", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
                 submitted = st.form_submit_button("Apply")
                 if not submitted:
                     q = st.session_state.get("as-q", "")
                 st.download_button(
-                    "Download CSV — Status as on Date (line-wise)",
+                    "Download CSV â€” Status as on Date (line-wise)",
                     data=view[[c for c in cols_pick if c in view.columns]].to_csv(index=False).encode("utf-8"),
                     file_name=f"wo_status_as_on_{as_on_ts.date()}.csv", mime="text/csv", key="dl-as-on"
                 )
@@ -2404,7 +2391,7 @@ for i, tab_label in enumerate(visible_tabs):
             if not _user_can("can_export"):
                 st.warning("You do not have permission to access Export.")
             elif can_view("Export"):
-                st.subheader("Export — CSV & PDF (grouped)")
+                st.subheader("Export â€” CSV & PDF (grouped)")
                 exp_date_toggle = st.checkbox("Apply 'as on date' filter to exports", value=False, key="exp-date-tgl")
                 if exp_date_toggle:
                     exp_as_on = st.date_input("As on date for export", pd.Timestamp.today().date(), key="exp-as-on")
@@ -2451,27 +2438,27 @@ for i, tab_label in enumerate(visible_tabs):
                 pdf_cols_pick = st.multiselect("Columns in PDF line tables", pdf_cols_options, default=pdf_cols_default, key="pdf-cols")
 
                 if pdf_mode == "All Projects":
-                    pdf_bytes = pdf_grouped_lines(base_items, mode="all_projects", selected=None, line_cols=pdf_cols_pick, title_suffix="— All Projects", alert_col=low_metric, threshold=low_threshold)
-                    st.download_button("Download PDF — All Projects", data=pdf_bytes, file_name="SJCPL_WO_AllProjects.pdf", mime="application/pdf", key="pdf-all")
+                    pdf_bytes = pdf_grouped_lines(base_items, mode="all_projects", selected=None, line_cols=pdf_cols_pick, title_suffix="â€” All Projects", alert_col=low_metric, threshold=low_threshold)
+                    st.download_button("Download PDF â€” All Projects", data=pdf_bytes, file_name="SJCPL_WO_AllProjects.pdf", mime="application/pdf", key="pdf-all")
                 elif pdf_mode == "By Project":
                     selp = st.multiselect("Select Project(s)", sorted(base_items["Project_Key"].dropna().unique()), default=sorted(base_items["Project_Key"].dropna().unique()), key="pdf-proj-sel")
                     if selp:
-                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_project", selected=selp, line_cols=pdf_cols_pick, title_suffix="— Project-wise", alert_col=low_metric, threshold=low_threshold)
-                        st.download_button("Download PDF — Project-wise", data=pdf_bytes, file_name="SJCPL_WO_ProjectWise.pdf", mime="application/pdf", key="pdf-proj")
+                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_project", selected=selp, line_cols=pdf_cols_pick, title_suffix="â€” Project-wise", alert_col=low_metric, threshold=low_threshold)
+                        st.download_button("Download PDF â€” Project-wise", data=pdf_bytes, file_name="SJCPL_WO_ProjectWise.pdf", mime="application/pdf", key="pdf-proj")
                     else:
                         st.info("Select at least one project.")
                 else:
                     sels = st.multiselect("Select Subcontractor(s)", sorted(base_items["Subcontractor_Key"].dropna().unique()), default=sorted(base_items["Subcontractor_Key"].dropna().unique()), key="pdf-sub-sel")
                     if sels:
-                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_sub", selected=sels, line_cols=pdf_cols_pick, title_suffix="— Subcontractor-wise", alert_col=low_metric, threshold=low_threshold)
-                        st.download_button("Download PDF — Subcontractor-wise", data=pdf_bytes, file_name="SJCPL_WO_SubcontractorWise.pdf", mime="application/pdf", key="pdf-sub")
+                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_sub", selected=sels, line_cols=pdf_cols_pick, title_suffix="â€” Subcontractor-wise", alert_col=low_metric, threshold=low_threshold)
+                        st.download_button("Download PDF â€” Subcontractor-wise", data=pdf_bytes, file_name="SJCPL_WO_SubcontractorWise.pdf", mime="application/pdf", key="pdf-sub")
                     else:
                         st.info("Select at least one subcontractor.")
         elif tab_label == "Email Drafts":
             if not _user_can("can_email_drafts"):
                 st.warning("You do not have permission to access Email Drafts.")
             elif can_view("Email Drafts"):
-                st.subheader("Email Drafts — Project-wise & Vendor-wise (tables + HTML/PDF/CSV)")
+                st.subheader("Email Drafts â€” Project-wise & Vendor-wise (tables + HTML/PDF/CSV)")
                 draft_date = st.date_input("Date for subject/body", pd.Timestamp.today().date(), key="draft-date")
                 only_low = st.checkbox("Show only Low items in drafts", value=False, key="draft-only-low")
                 ason_toggle = st.checkbox("Use 'Status as on Date' filter for drafts", value=False, key="draft-as-on")
@@ -2492,7 +2479,7 @@ for i, tab_label in enumerate(visible_tabs):
                 missing = [c for c in expected_post_rename if not best_col(renamed_preview, c)]
                 st.write(f"Rows in file: {len(raw_df):,}")
                 st.write(f"Rows considered as 'items': {len(items_df):,}  (filter used: {getattr(items_df, '_lt_filter_note', 'n/a')})")
-                st.write(f"Detected key columns: {present if present else '—'}")
+                st.write(f"Detected key columns: {present if present else 'â€”'}")
                 if missing: st.warning(f"Missing/alias columns not found (fallbacks used or set to NaN): {missing}")
                 st.dataframe(renamed_preview.head(30), use_container_width=True, hide_index=True)
         elif tab_label == "Raise Requirement":
@@ -2531,7 +2518,7 @@ for i, tab_label in enumerate(visible_tabs):
                         if line_pairs.empty:
                             st.warning("No line items found under the selected Project/Vendor/WO.")
                             st.stop()
-                        line_pairs["label"] = line_pairs.apply(lambda r: f"Line {r['Line_Key']} — {str(r['OD_Description'])[:60]}… (Rem: {r['Remaining_Qty']:.2f})", axis=1)
+                        line_pairs["label"] = line_pairs.apply(lambda r: f"Line {r['Line_Key']} â€” {str(r['OD_Description'])[:60]}â€¦ (Rem: {r['Remaining_Qty']:.2f})", axis=1)
                         pick_label = st.selectbox("Select Line", line_pairs["label"].tolist(), key="rq-line-lab")
                         row = line_pairs[line_pairs["label"] == pick_label].iloc[0]
                         line_key = str(row["Line_Key"])
@@ -2577,7 +2564,7 @@ for i, tab_label in enumerate(visible_tabs):
                     if approval_required:
                         st.warning("Approval required: " + ("Requested qty exceeds Remaining." if approval_reason == "low_qty" else "New item."))
 
-                    if st.button("➕ Add line to request", type="primary", key="rq-add"):
+                    if st.button("âž• Add line to request", type="primary", key="rq-add"):
                         if qty <= 0:
                             st.error("Quantity must be greater than 0.")
                         #elif not date_cast or not date_test:
@@ -2616,14 +2603,14 @@ for i, tab_label in enumerate(visible_tabs):
                             
                     if st.session_state.req_cart: # If cart is not empty
                         st.markdown("---")
-                        st.markdown("### Current Request — Line Items")
+                        st.markdown("### Current Request â€” Line Items")
                         cart_df = pd.DataFrame(st.session_state.req_cart)
                         st.dataframe(cart_df, use_container_width=True, hide_index=True)
 
                         needs_approval_now = any(bool(item.get("approval_required")) for item in st.session_state.req_cart)
                         cc1, cc2, cc3 = st.columns(3)
                         with cc1:
-                            if st.button("dY-�,? Clear cart", key="rq-clear"):
+                            if st.button("dY-ï¿½,? Clear cart", key="rq-clear"):
                                 st.session_state.req_cart = []
                                 st.rerun()
                         with cc2:
@@ -2655,7 +2642,7 @@ for i, tab_label in enumerate(visible_tabs):
                             # Persist rows one-by-one using UPSERT on ref
                             if used_rows:
                                 try:
-                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE …
+                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE â€¦
                                     # refresh from DB so the grid shows the authoritative data
                                     st.session_state.reqlog_df = read_reqlog_df()
                                 except Exception as e:
@@ -2669,7 +2656,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
                                     mime="application/pdf", key="rq-pdf")
                                 if reused_map:
-                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.")
+                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) â€” existing references were reused.")
 
                                 # Decide post-generation emailing behaviour
                                 reused_refs = set(reused_map.values()) if reused_map else set()
@@ -2694,7 +2681,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     elif email_vendor_after and not refs_generated:
                                         st.info("Vendor email skipped because no new references were generated.")
                                     else:
-                                        st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
+                                        st.success("This request is already approved. You can email the vendor from â€˜My Requestsâ€™ (or Requirements Registry).")
                                     if not email_vendor_after:
                                         st.info("Vendor email skipped; use 'My Requests' or 'Requirements Registry' to send it later.")
                                 else:
@@ -2778,118 +2765,6 @@ for i, tab_label in enumerate(visible_tabs):
                             else:
                                 st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
 
-                            if pdf_bytes and used_rows:
-                                first_entry = used_rows[0]
-                                st.download_button("Download Requirements PDF", data=pdf_bytes,
-                                    file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
-                                    mime="application/pdf", key="rq-pdf")
-                                if reused_map:
-                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.")
-
-                                # Decide post-generation emailing behaviour
-                                reused_refs = set(reused_map.values()) if reused_map else set()
-                                refs_generated = [
-                                    str(r.get("ref", "")).strip()
-                                    for r in used_rows
-                                    if str(r.get("ref", "")).strip() and r.get("ref") not in reused_refs
-                                ]
-
-                                any_pending = any(str(r.get("status", "")).startswith("Pending") for r in used_rows)
-                                all_sendable = all(_can_send_vendor_email(str(r.get("status", ""))) for r in used_rows)
-
-                                if any_pending and not approval_email_enabled and "rq-email-approver" not in st.session_state:
-                                    approval_email_enabled = True
-
-                                if any_pending:
-                                    if email_vendor_after and refs_generated:
-                                        st.info("Vendor email skipped because one or more items need approval. Email the vendor after approval from 'My Requests' or 'Requirements Registry'.")
-                                elif all_sendable:
-                                    if email_vendor_after and refs_generated:
-                                        _send_vendor_emails_for_refs(refs_generated)
-                                    elif email_vendor_after and not refs_generated:
-                                        st.info("Vendor email skipped because no new references were generated.")
-                                    else:
-                                        st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
-                                    if not email_vendor_after:
-                                        st.info("Vendor email skipped; use 'My Requests' or 'Requirements Registry' to send it later.")
-                                else:
-                                    st.info("Some lines are not yet approved; vendor emailing will be available once they're approved.")
-                            else:
-                                st.warning("Nothing to generate. Check quantities and descriptions in your cart.")
-                            # --- Email approvers for rows that require approval ---
-                            try: # Patch 1
-                                # Collect rows needing approval
-                                needing_approval = [r for r in used_rows if str(r.get("status", "")).startswith("Pending")]
-                                if needing_approval and not approval_email_enabled:
-                                    st.info("Approval email not sent because the approval-email checkbox is off.")
-                                elif needing_approval:
-                                    # Use the first row for subject/attachment naming; include a summary of all pending lines in body
-                                    first_row = needing_approval[0]
-                                    pc = first_row.get("project_code")
-                                    vk = first_row.get("vendor")
-                                    rt = first_row.get("request_type")
-                                    requester_name = first_row.get("generated_by_name", "Requester")
-
-                                    approver_emails = list_approver_emails(pc, vk, rt)
-                                    if not approver_emails:
-                                        st.warning("No approval recipients configured for this scope. Add them in Admin > Approval Recipients.")
-                                    else:
-                                        # Build HTML summary for all pending lines
-                                        rows_html = "".join(
-                                            f"<tr><td style='padding:6px 8px'>{r.get('ref','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('description','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('qty','')} {r.get('uom','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('status_detail','')}</td></tr>"
-                                            for r in needing_approval
-                                        )
-                                        html_body = f"""
-                                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222"> 
-                                          <p>Approval required for the following request(s):</p>
-                                          <table style="border-collapse:collapse;font-size:13px">
-                                            <thead>
-                                              <tr style="background:#f0f0f0">
-                                                <th style="padding:6px 8px;text-align:left">Ref</th>
-                                                <th style="padding:6px 8px;text-align:left">Project</th>
-                                                <th style="padding:6px 8px;text-align:left">Vendor</th>
-                                                <th style="padding:6px 8px;text-align:left">Type</th>
-                                                <th style="padding:6px 8px;text-align:left">Item</th>
-                                                <th style="padding:6px 8px;text-align:left">Qty</th>
-                                                <th style="padding:6px 8px;text-align:left">Reason</th>
-                                              </tr>
-                                            </thead>
-                                            <tbody>{rows_html}</tbody>
-                                          </table>
-                                          <p>Attached: combined PDF generated by the system.</p>
-                                        </div>
-                                        """
-
-                                        subject = f"[SJCPL] Approval needed - {first_row.get('project_code','')} - {len(needing_approval)} item(s) - by {requester_name}"
-                                        attach_name = f"{first_row['ref'].split('/')[1]}_PendingApproval.pdf" if first_row.get("ref") else "PendingApproval.pdf"
-
-                                        # Reuse the combined PDF you just created
-                                        ok_mail, msg_mail = send_email_via_smtp(
-                                            ",".join(approver_emails),  # or loop and send individually if your SMTP doesn't accept multiple recipients
-                                            subject, html_body, pdf_bytes, attach_name
-                                        )
-
-                                        # Log each recipient (optional, if you added a mail log function)
-                                        try:
-                                            for em in approver_emails:
-                                                log_requirement_email(first_row.get("ref",""), vk, em, subject, ok_mail, (None if ok_mail else msg_mail))
-                                        except Exception:
-                                            pass
-
-                                        if ok_mail:
-                                            st.success(f"Sent approval email to: {', '.join(approver_emails)}")
-                                        else:
-                                            st.error(f"Approval email failed: {msg_mail}")
-                                else:
-                                    pass
-                            except Exception as e:
-                                st.error(f"Error while sending approval email: {e}") # Patch 1
         elif tab_label == "My Requests":
             if can_view("My Requests"):
                 render_my_requests_tab(st, st.session_state.user.get("email",""), st.session_state.reqlog_df, st.session_state.company_meta)
@@ -2917,7 +2792,7 @@ for i, tab_label in enumerate(visible_tabs):
                 if status_pick: df = df[df["status"].isin(status_pick)]
 
                 st.dataframe(df.sort_values("generated_at", ascending=False), use_container_width=True, hide_index=True)
-                st.download_button("⬇️ Download Registry (CSV)", data=df.to_csv(index=False).encode("utf-8"),
+                st.download_button("â¬‡ï¸ Download Registry (CSV)", data=df.to_csv(index=False).encode("utf-8"),
                                   file_name="requirements_registry.csv", mime="text/csv", key="reg-dl")
 
                 st.markdown("### View / Print a Raised Requirement")
@@ -2944,9 +2819,9 @@ for i, tab_label in enumerate(visible_tabs):
                     # Toggles: vendor OFF by default, requester ON by default
                     colA, colB, colC, colD = st.columns([1,1,1,2])
                     with colA:
-                        do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
+                        do_approve = st.button("âœ… Approve", type="primary", key="admin-approve-btn")
                     with colB:
-                        do_reject = st.button("⛔ Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
+                        do_reject = st.button("â›” Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
                         send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
                     with colD:
                         send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
@@ -2993,10 +2868,10 @@ for i, tab_label in enumerate(visible_tabs):
                                 try:
                                     v_email = get_vendor_email(vendor_key)
                                     if not v_email:
-                                        st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
+                                        st.warning(f"No vendor email configured for: {vendor_key}. (Admin â†’ Vendor Contacts)")
                                         continue # Skip if no email found
  
-                                    subject = f"[SJCPL] Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                    subject = f"[SJCPL] Approved â€” {bucket[0].get('project_code','')} â€” {len(bucket)} item(s)"
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -3022,10 +2897,10 @@ for i, tab_label in enumerate(visible_tabs):
                                         pass
  
                                     if ok_mail: sent_ok += 1 # Count successful sends
-                                    else: sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
+                                    else: sent_err.append(f"{vendor_key} â†’ {v_email}: {msg_mail}")
  
                                 except Exception as e:
-                                    sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
+                                    sent_err.append(f"{vendor_key} â†’ {v_email or '-'}: {e}")
                                     continue
  
                             if sent_ok:
@@ -3048,7 +2923,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
                                 sent_ok_r, sent_err_r = 0, []
                                 for remail, bucket in by_requester.items():
-                                    subject = f"[SJCPL] Your request was Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                    subject = f"[SJCPL] Your request was Approved â€” {bucket[0].get('project_code','')} â€” {len(bucket)} item(s)"
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -3088,7 +2963,7 @@ for i, tab_label in enumerate(visible_tabs):
                         st.rerun()
 
                 # NEW: Separate expander for Send Email to Vendor (only for Approved / Auto Approved)
-                with st.expander("📧 Send Email to Vendor (Approved items only)", expanded=False):
+                with st.expander("ðŸ“§ Send Email to Vendor (Approved items only)", expanded=False):
                     refs_all = df[df["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
                     refs_pick = st.multiselect("Select ref(s)", refs_all, key="reg-email-refs")
                     if st.button("Send vendor email", key="reg-email-btn"):
@@ -3096,11 +2971,11 @@ for i, tab_label in enumerate(visible_tabs):
                         st.rerun()
         elif tab_label == "Admin":
             if can_view("Admin") and _user_is_master_admin():
-                st.subheader("Admin — Users & Access")
+                st.subheader("Admin â€” Users & Access")
                 _ensure_acl_in_state()
                 st.dataframe(st.session_state.acl_df, use_container_width=True, hide_index=True)
 
-                with st.expander("➕ Add / Update User", expanded=False):
+                with st.expander("âž• Add / Update User", expanded=False):
                     available_sites = sorted(items_df["Project_Key"].dropna().unique().tolist()) if not items_df.empty else []
                     site_choices = ["*"] + available_sites
                     tab_choices = [t for t in all_tab_names if t != "Admin"] + ["*"]
@@ -3176,14 +3051,14 @@ for i, tab_label in enumerate(visible_tabs):
                             write_acl_df(dfu)
                             st.success("User saved.")
                 
-                # Admin UI: master-admin–only Vendor Contacts manager
-                with st.expander("📧 Vendor Contacts (DB-only, master admin)"):
+                # Admin UI: master-adminâ€“only Vendor Contacts manager
+                with st.expander("ðŸ“§ Vendor Contacts (DB-only, master admin)"):
                     try:
                         vdf = read_vendor_contacts()
                     except Exception as e:
                         vdf = pd.DataFrame(columns=["vendor","email"])
                         st.error(f"Failed to read vendor contacts: {e}")
-                    st.caption("Map Subcontractor_Key → Vendor email. Only stored in the database.")
+                    st.caption("Map Subcontractor_Key â†’ Vendor email. Only stored in the database.")
                     st.dataframe(vdf, use_container_width=True, hide_index=True)
 
                     with st.form("vendor-email-upsert"):
@@ -3201,7 +3076,7 @@ for i, tab_label in enumerate(visible_tabs):
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
 
-                with st.expander("✅ Approval Recipients (master admin)"):
+                with st.expander("âœ… Approval Recipients (master admin)"):
                     st.caption("Recipients here will receive emails when a request is Pending Admin Approval.")
                     # Load current recipients
                     try:
@@ -3260,11 +3135,11 @@ for i, tab_label in enumerate(visible_tabs):
 
                     st.markdown("""
                     <div style="font-size:12px;color:#555;line-height:1.5">
-                        <b>Scoping rules (most specific → least):</b><br/>
-                        (project_code, vendor_key, request_type) → (project_code, vendor_key, NULL) →
-                        (project_code, NULL, request_type) → (NULL, vendor_key, request_type) →
-                        (project_code, NULL, NULL) → (NULL, vendor_key, NULL) →
-                        (NULL, NULL, request_type) → (NULL, NULL, NULL).
+                        <b>Scoping rules (most specific â†’ least):</b><br/>
+                        (project_code, vendor_key, request_type) â†’ (project_code, vendor_key, NULL) â†’
+                        (project_code, NULL, request_type) â†’ (NULL, vendor_key, request_type) â†’
+                        (project_code, NULL, NULL) â†’ (NULL, vendor_key, NULL) â†’
+                        (NULL, NULL, request_type) â†’ (NULL, NULL, NULL).
                     </div>
                     """, unsafe_allow_html=True)
                 # Add SMTP Diagnostics
@@ -3284,8 +3159,8 @@ for i, tab_label in enumerate(visible_tabs):
                             s.ehlo()
                         st.success(f"STARTTLS connection OK on {cfg['host']}:{cfg['port']}")
                     except Exception as e:
-                        st.warning(f"STARTTLS check failed on {cfg['host']}:{cfg['port']} → {e}")
-                with st.expander("📮 SMTP Diagnostics"):
+                        st.warning(f"STARTTLS check failed on {cfg['host']}:{cfg['port']} â†’ {e}")
+                with st.expander("ðŸ“® SMTP Diagnostics"):
                     if st.button("Run SMTP connectivity check"):
                         smtp_connectivity_check()
                     st.caption("Tip: If both checks fail, your host likely blocks SMTP egress. Use an email API (SendG")
@@ -3293,7 +3168,7 @@ for i, tab_label in enumerate(visible_tabs):
 
 
 
-                with st.expander("🗑️ Remove User", expanded=False):
+                with st.expander("ðŸ—‘ï¸ Remove User", expanded=False):
                     emails = sorted(st.session_state.acl_df["email"].tolist())
                     if emails:
                         rm = st.selectbox("Select user to remove", emails, key="admin-remove-email")
@@ -3302,7 +3177,7 @@ for i, tab_label in enumerate(visible_tabs):
                             write_acl_df(st.session_state.acl_df)
                             st.success("User removed.")
 
-                st.download_button("⬇️ Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
+                st.download_button("â¬‡ï¸ Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
                                   file_name="acl_users.csv", mime="text/csv", key="acl-dl")
 
                 st.subheader("Manage Enabled Tabs")
@@ -3318,4 +3193,4 @@ for i, tab_label in enumerate(visible_tabs):
                     st.rerun()
 
 
-st.caption("© SJCPL-Test Request and Approvals — V1")
+st.caption("Â© SJCPL-Test Request and Approvals â€” V1")
