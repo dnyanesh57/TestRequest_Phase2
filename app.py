@@ -2147,7 +2147,7 @@ def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.Data
     st.markdown("### Admin Tools")
     c1, c2 = st.columns([1,1]) # Replace all occurrences of "ðŸ”" with "🔄"
     with c1:
-        if st.button("ðŸ” Run Post-CSV Auto-Approval sweep"):
+        if st.button("🔁 Run Post-CSV Auto-Approval sweep"):
             upd, n = run_post_csv_auto_approvals(reqlog_df, items_df)
             save_cb(upd)
             st.success(f"Auto-approved {n} record(s) where stock is now available.")
@@ -2223,7 +2223,7 @@ with st.sidebar:
     low_threshold = st.number_input("Low-qty threshold", min_value=0.0, max_value=1e9, value=10.0, step=1.0, key="low-thr") # Replace all occurrences of "ðŸ·ï¸" with "🏢"
 
 if _user_is_master_admin():
-    with st.sidebar.expander("ðŸ·ï¸ Company & Branding (Admin)"):
+    with st.sidebar.expander("🏷️ Company & Branding (Admin)"):
         name = st.text_input("Company Name", st.session_state.company_meta["name"])
         addr1 = st.text_input("Address line 1", st.session_state.company_meta["address_lines"][0])
         addr2 = st.text_input("Address line 2", st.session_state.company_meta["address_lines"][1])
@@ -2265,7 +2265,7 @@ if _user_is_master_admin():
 if S["data_source"] == "github":
     c1, c2 = st.columns([1,1])
     with c1:
-        reload_gh = st.button("ðŸ”„ Reload from GitHub", key="gh-reload")
+        reload_gh = st.button("🔄 Reload from GitHub", key="gh-reload")
     with c2:
         st.caption(st.session_state._raw_df_meta or "No file loaded yet.")
 
@@ -2819,7 +2819,7 @@ for i, tab_label in enumerate(visible_tabs):
                     if approval_required:
                         st.warning("Approval required: " + ("Requested qty exceeds Remaining." if approval_reason == "low_qty" else "New item."))
 
-                    if st.button("âž• Add line to request", type="primary", key="rq-add"):
+                    if st.button("➕ Add line to request", type="primary", key="rq-add"):
                         if qty <= 0:
                             st.error("Quantity must be greater than 0.")
                         #elif not date_cast or not date_test:
@@ -2865,7 +2865,7 @@ for i, tab_label in enumerate(visible_tabs):
                         needs_approval_now = any(bool(item.get("approval_required")) for item in st.session_state.req_cart)
                         cc1, cc2, cc3 = st.columns(3)
                         with cc1:
-                            if st.button("dY-ï¿½,? Clear cart", key="rq-clear"):
+                            if st.button("🗑️ Clear  cart", key="rq-clear"):
                                 st.session_state.req_cart = []
                                 st.rerun()
                         with cc2:
@@ -3047,7 +3047,7 @@ for i, tab_label in enumerate(visible_tabs):
                 if status_pick: df = df[df["status"].isin(status_pick)]
 
                 st.dataframe(df.sort_values("generated_at", ascending=False), use_container_width=True, hide_index=True)
-                st.download_button("â¬‡ï¸ Download Registry (CSV)", data=df.to_csv(index=False).encode("utf-8"),
+                st.download_button("⬇️ Download Registry (CSV)", data=df.to_csv(index=False).encode("utf-8"),
                                   file_name="requirements_registry.csv", mime="text/csv", key="reg-dl")
 
                 st.markdown("### View / Print a Raised Requirement")
@@ -3074,9 +3074,9 @@ for i, tab_label in enumerate(visible_tabs):
                     # Toggles: vendor OFF by default, requester ON by default
                     colA, colB, colC, colD = st.columns([1,1,1,2])
                     with colA:
-                        do_approve = st.button("âœ… Approve", type="primary", key="admin-approve-btn")
+                        do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
                     with colB:
-                        do_reject = st.button("â›” Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
+                        do_reject = st.button("❌ Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
                         send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
                     with colD:
                         send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
@@ -3218,7 +3218,7 @@ for i, tab_label in enumerate(visible_tabs):
                         st.rerun()
 
                 # NEW: Separate expander for Send Email to Vendor (only for Approved / Auto Approved)
-                with st.expander("ðŸ“§ Send Email to Vendor (Approved items only)", expanded=False):
+                with st.expander("📧 Send Email to Vendor (Approved items only)", expanded=False):
                     refs_all = df[df["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
                     refs_pick = st.multiselect("Select ref(s)", refs_all, key="reg-email-refs")
                     if st.button("Send vendor email", key="reg-email-btn"):
@@ -3226,11 +3226,11 @@ for i, tab_label in enumerate(visible_tabs):
                         st.rerun()
         elif tab_label == "Admin":
             if can_view("Admin") and _user_is_master_admin():
-                st.subheader("Admin â€” Users & Access")
+                st.subheader("Admin  —  Users & Access")
                 _ensure_acl_in_state()
                 st.dataframe(st.session_state.acl_df, use_container_width=True, hide_index=True)
 
-                with st.expander("âž• Add / Update User", expanded=False):
+                with st.expander("➕ Add / Update User", expanded=False):
                     available_sites = sorted(items_df["Project_Key"].dropna().unique().tolist()) if not items_df.empty else []
                     site_choices = ["*"] + available_sites
                     tab_choices = [t for t in all_tab_names if t != "Admin"] + ["*"]
@@ -3307,7 +3307,7 @@ for i, tab_label in enumerate(visible_tabs):
                             st.success("User saved.")
                 
                 # Admin UI: master-adminâ€“only Vendor Contacts manager
-                with st.expander("ðŸ“§ Vendor Contacts (DB-only, master admin)"):
+                with st.expander("📧 Vendor Contacts (DB-only, master admin)"):
                     try:
                         vdf = read_vendor_contacts()
                     except Exception as e:
@@ -3331,7 +3331,7 @@ for i, tab_label in enumerate(visible_tabs):
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
 
-                with st.expander("âœ… Approval Recipients (master admin)"):
+                with st.expander("✅  Approval Recipients (master admin)"):
                     st.caption("Recipients here will receive emails when a request is Pending Admin Approval.")
                     # Load current recipients
                     try:
@@ -3415,7 +3415,7 @@ for i, tab_label in enumerate(visible_tabs):
                         st.success(f"STARTTLS connection OK on {cfg['host']}:{cfg['port']}")
                     except Exception as e:
                         st.warning(f"STARTTLS check failed on {cfg['host']}:{cfg['port']} â†’ {e}")
-                with st.expander("ðŸ“® SMTP Diagnostics"):
+                with st.expander("📮 SMTP Diagnostics"):
                     if st.button("Run SMTP connectivity check"):
                         smtp_connectivity_check()
                     st.caption("Tip: If both checks fail, your host likely blocks SMTP egress. Use an email API (SendG")
@@ -3423,7 +3423,7 @@ for i, tab_label in enumerate(visible_tabs):
 
 
 
-                with st.expander("ðŸ—‘ï¸ Remove User", expanded=False):
+                with st.expander("🗑️ Remove User", expanded=False):
                     emails = sorted(st.session_state.acl_df["email"].tolist())
                     if emails:
                         rm = st.selectbox("Select user to remove", emails, key="admin-remove-email")
@@ -3432,7 +3432,7 @@ for i, tab_label in enumerate(visible_tabs):
                             write_acl_df(st.session_state.acl_df)
                             st.success("User removed.")
 
-                st.download_button("â¬‡ï¸ Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
+                st.download_button("⬇️ Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
                                   file_name="acl_users.csv", mime="text/csv", key="acl-dl")
 
                 st.subheader("Manage Enabled Tabs")
