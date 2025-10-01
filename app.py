@@ -3347,7 +3347,7 @@ for i, tab_label in enumerate(visible_tabs):
  
                     if (do_approve or do_reject) and not refs_to_act:
                         st.warning("Pick at least one reference.")
-                elif do_approve or do_reject:
+                    elif do_approve or do_reject:
                         # --- NEW: Subcontract Team Notification Logic ---
                         if do_approve:
                             subcontract_team_emails = read_subcontract_team_emails()
