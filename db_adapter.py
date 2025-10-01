@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import json
+from typing import Sequence
 from urllib.parse import urlparse
 from contextlib import contextmanager
 import datetime as dt
@@ -364,6 +365,82 @@ def write_app_settings(use_github: bool, repo: str, branch: str, folder: str) ->
               github_folder = excluded.github_folder
         """), dict(use_github=bool(use_github), repo=repo, branch=branch, folder=folder))
 
+
+# --- Site groups (persisted) ---
+def ensure_site_groups_table() -> None:
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS site_groups (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  group_name TEXT UNIQUE NOT NULL,
+                  sites TEXT NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  created_by TEXT,
+                  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  updated_by TEXT
+                )
+            """))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS site_groups (
+                  id BIGSERIAL PRIMARY KEY,
+                  group_name TEXT UNIQUE NOT NULL,
+                  sites TEXT NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  created_by TEXT,
+                  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  updated_by TEXT
+                )
+            """))
+
+def read_site_groups() -> pd.DataFrame:
+    ensure_site_groups_table()
+    df = df_read("select id, group_name, sites, created_at, created_by, updated_at, updated_by from site_groups order by lower(group_name)")
+    if df.empty:
+        return pd.DataFrame(columns=["id", "group_name", "sites", "created_at", "created_by", "updated_at", "updated_by"])
+    return df
+
+def upsert_site_group(group_name: str, sites: Sequence[str] | None, by_email: str | None = None) -> None:
+    name = (group_name or "").strip()
+    if not name:
+        raise ValueError("group_name required")
+    sites = sites or []
+    site_tokens: list[str] = []
+    for s in sites:
+        token = str(s or "").strip()
+        if token:
+            site_tokens.append(token)
+    if not site_tokens:
+        raise ValueError("At least one site is required")
+    sites_dedup = list(dict.fromkeys(site_tokens))
+    sites_str = "|".join(sites_dedup)
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                INSERT INTO site_groups (group_name, sites, created_by, updated_by)
+                VALUES (:name, :sites, :by, :by)
+                ON CONFLICT(group_name) DO UPDATE SET
+                  sites = excluded.sites,
+                  updated_at = datetime('now'),
+                  updated_by = excluded.updated_by
+            """), {"name": name, "sites": sites_str, "by": by_email})
+        else:
+            c.execute(text("""
+                INSERT INTO site_groups (group_name, sites, created_by, updated_by)
+                VALUES (:name, :sites, :by, :by)
+                ON CONFLICT (group_name) DO UPDATE SET
+                  sites = excluded.sites,
+                  updated_at = NOW(),
+                  updated_by = excluded.updated_by
+            """), {"name": name, "sites": sites_str, "by": by_email})
+
+def delete_site_group(group_name: str) -> None:
+    name = (group_name or "").strip()
+    if not name:
+        raise ValueError("group_name required")
+    with _conn() as c:
+        c.execute(text("DELETE FROM site_groups WHERE lower(group_name) = lower(:name)"), {"name": name})
 
 def _clean_row_for_db(row: dict) -> dict:
     clean = {}

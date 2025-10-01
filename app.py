@@ -1,5 +1,5 @@
 ﻿# wo_phase2_dashboard_sjcpl.py
-# SJCPL â€” Work Order Dashboard (Phase 1 + Phase 2) â€” Integrated Engine
+# SJCPL — Work Order Dashboard (Phase 1 + Phase 2) — Integrated Engine
 # Final, Complete, and Functional Version
 from __future__ import annotations
 import io, os, uuid, hmac, hashlib, json, base64, requests, secrets
@@ -24,6 +24,7 @@ from db_adapter import (
     update_requirement_status, read_requirements_by_refs, _conn,
     
     read_app_settings, write_app_settings,   # NEW
+    ensure_site_groups_table, read_site_groups, upsert_site_group, delete_site_group,
 )
 import numpy as np
 import pandas as pd
@@ -53,10 +54,10 @@ APP_TITLE = "SJCPL - Test Request and Approval V1"
 BRAND_BLUE = "#00AEDA"; BRAND_BLACK = "#000000"; BRAND_GREY = "#939598"; BRAND_WHITE = "#FFFFFF"
 PLOTLY_COLORS = [BRAND_BLUE, BRAND_BLACK, BRAND_GREY, "#146C94", "#4A4A4A"]
 
-st.set_page_config(page_title=APP_TITLE, page_icon="📑", layout="wide")
+st.set_page_config(page_title=APP_TITLE, page_icon="??", layout="wide")
 pd.options.mode.copy_on_write = True
 px.defaults.template = "plotly_white"; px.defaults.color_discrete_sequence = PLOTLY_COLORS
-# Replace all occurrences of "ðŸ“‘" with "📊"
+# Replace all occurrences of "📑" with "??"
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap');
@@ -105,7 +106,7 @@ def _ensure_once(flag: str, func, err_msg: str, level: str = "error") -> None:
 def brand_header():
     st.markdown(f'<div class="big-title">{APP_TITLE}</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtle">V1_0926</div>', unsafe_allow_html=True)
-    st.markdown('<hr class="brand" />', unsafe_allow_html=True) # Replace all occurrences of "ðŸ“‘" with "📊"
+    st.markdown('<hr class="brand" />', unsafe_allow_html=True) # Replace all occurrences of "📑" with "??"
 
 
 
@@ -117,6 +118,9 @@ _ensure_once("_password_reset_table_ready", ensure_password_reset_tables, "DB in
 
 # Ensure approval recipient tables exist
 _ensure_once("_approval_tables_ready", ensure_approval_recipient_tables, "DB init (approval recipients) failed")
+
+# Ensure site groups table exists
+_ensure_once("_site_groups_table_ready", ensure_site_groups_table, "DB init (site groups table) failed")
 
 # Ensure reqlog email columns exist
 _ensure_once("_reqlog_email_columns_ready", ensure_reqlog_email_columns, "Could not verify emailed_* columns on requirements_log", level="warning")
@@ -228,10 +232,10 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
     if not ok:
         return False, "SMTP is not configured. Add [smtp] to .streamlit/secrets.toml (host, port, user, password, from_email)."
 
-    # Gmail sanity check (common source of â€˜connection closedâ€™ during auth)
+    # Gmail sanity check (common source of ‘connection closed’ during auth)
     if "gmail.com" in (cfg["host"] or "").lower():
         # App Password (not account password) is required if 2FA is on, and FROM must match USER.
-        if cfg["from_email"].lower() != cfg["user"].lower(): # Replace all occurrences of "â€˜" with "'"
+        if cfg["from_email"].lower() != cfg["user"].lower(): # Replace all occurrences of "‘" with "'"
             return False, "Gmail requires from_email == user. Set both to the same Gmail address."
     msg = _build_mime_message(cfg, to_email, subject, html_body, attachment_bytes, attachment_name)
 
@@ -268,11 +272,15 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
         except Exception as e2:
             # Compose helpful message
             hint = []
-            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower(): # Replace all occurrences of "â€˜" with "'"
-                hint.append("Network timeoutâ€”your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
+            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower(): # Replace all occurrences of "‘" with "'"
+                hint.append("Network timeout—your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
             if "gmail" in (cfg["host"] or "").lower():
                 hint.append("For Gmail: use an App Password, and set from_email == user.")
             return False, f"{type(e2).__name__}: {e2}. Prior: {type(last_err).__name__}: {last_err}. " + (" ".join(hint) if hint else "")
+
+# Cached site groups
+if "site_groups_df" not in st.session_state:
+    st.session_state.site_groups_df = read_site_groups()
 
 if "app_settings" not in st.session_state:
     st.session_state.app_settings = {
@@ -284,7 +292,7 @@ if "app_settings" not in st.session_state:
 # Show logged-in user at the top-right of the app
 u = st.session_state.get("user", {})
 st.markdown(f"<div style='text-align:right;color:#555;font-size:12px'>"\
-            f"Signed in as: <b>{u.get('name','Guest')}</b> "# Replace all occurrences of "â€”" with "-"
+            f"Signed in as: <b>{u.get('name','Guest')}</b> "# Replace all occurrences of "—" with "-"
             f"({u.get('role','guest')}) &lt;{u.get('email','guest@sjcpl.local')}&gt;</div>",
             unsafe_allow_html=True)
 
@@ -307,8 +315,8 @@ GITHUB_API_URL = "https://api.github.com/repos/dnyanesh57/TestRequest_Phase2/con
 COMPANY_DEFAULT = {
     "name": "SJ Contracts Pvt Ltd",
     "address_lines": [
-        "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park", # Replace all occurrences of "â€“" with "-"
-        "Baner Road, Opp. Sadanand Hotel, Baner, Pune â€“ 411045"
+        "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park", # Replace all occurrences of "–" with "-"
+        "Baner Road, Opp. Sadanand Hotel, Baner, Pune – 411045"
     ]
 }
 _NUMERIC_COLS = {"Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"}
@@ -427,7 +435,7 @@ def _ensure_acl_in_state():
     if "acl_df" in st.session_state:
         return
 
-    df = pd.DataFrame() # Replace all occurrences of "â€”" with "-"
+    df = pd.DataFrame() # Replace all occurrences of "—" with "-"
 
     # 1) Try DB first
     try:
@@ -791,7 +799,7 @@ def pdf_grouped_lines(
     )
     story = []; styles = _styles()
 
-    story.append(Paragraph(f"SJCPL â€” Work Order Report {title_suffix}".strip(), styles["BrandTitle"]))
+    story.append(Paragraph(f"SJCPL — Work Order Report {title_suffix}".strip(), styles["BrandTitle"]))
     story.append(Paragraph(
         "Tables are wrapped to fit the page width. If columns exceed the page, the table is split into parts, "
         "repeating Line # and Description. Low cells are shown in red.", styles["Small"]))
@@ -800,7 +808,7 @@ def pdf_grouped_lines(
     def add_proj_block(dfp: pd.DataFrame, proj_name: str):
         story.append(Paragraph(f"Project: {proj_name}", styles["BrandH2"]))
         for wo, dwo in dfp.groupby("WO_Key", dropna=False):
-            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "â€”" with "-"
+            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "—" with "-"
             rmc  = float(pd.to_numeric(dwo.get("Remeasure_Add"), errors="coerce").sum())
             rev  = float(pd.to_numeric(dwo.get("Revised_Qty"), errors="coerce").sum())
             used = float(pd.to_numeric(dwo.get("Used_Qty"), errors="coerce").sum())
@@ -808,8 +816,8 @@ def pdf_grouped_lines(
             lines = int(dwo.get("Line_Key").nunique()) if "Line_Key" in dwo.columns else len(dwo)
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             story.append(Paragraph(
-                f"WO: {wo}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
-                f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}", # Replace all occurrences of "â€”" with "-"
+                f"WO: {wo}  —  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
+                f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}", # Replace all occurrences of "—" with "-"
                 styles["Small"]
             ))
             tbl_cols = [c for c in line_cols if c in dwo.columns]
@@ -820,7 +828,7 @@ def pdf_grouped_lines(
     def add_sub_block(dfs: pd.DataFrame, sub_name: str):
         story.append(Paragraph(f"Subcontractor: {sub_name}", styles["BrandH2"]))
         for wo, dwo in dfs.groupby("WO_Key", dropna=False):
-            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "â€”" with "-"
+            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "—" with "-"
             rmc  = float(pd.to_numeric(dwo.get("Remeasure_Add"), errors="coerce").sum())
             rev  = float(pd.to_numeric(dwo.get("Revised_Qty"), errors="coerce").sum())
             used = float(pd.to_numeric(dwo.get("Used_Qty"), errors="coerce").sum())
@@ -829,7 +837,7 @@ def pdf_grouped_lines(
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             proj = str(dwo["Project_Key"].iloc[0]) if "Project_Key" in dwo.columns and len(dwo)>0 else ""
             story.append(Paragraph(
-                f"WO: {wo}  â€”  Project: {proj}  â€”  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  " # Replace all occurrences of "â€”" with "-"
+                f"WO: {wo}  —  Project: {proj}  —  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  " # Replace all occurrences of "—" with "-"
                 f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}",
                 styles["Small"]
             ))
@@ -860,7 +868,7 @@ def _ensure_reqlog_in_state():
 
 def _load_enabled_tabs():
     t = read_enabled_tabs()
-    return t if t else ["Overview","Group: WO â†’ Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
+    return t if t else ["Overview","Group: WO → Project","Work Order Explorer","Lifecycle","Subcontractor Summary","Browse","Status as on Date","Export","Email Drafts","Diagnostics","Raise Requirement","My Requests","Requirements Registry","Admin"]
 
 def _save_enabled_tabs(lst):
     write_enabled_tabs(lst)
@@ -948,10 +956,84 @@ def _user_can(flag: str) -> bool:
         return True
     return bool(st.session_state.user.get(flag, False))
 
+def _split_site_string(value) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        tokens: list[str] = []
+        for item in value:
+            token = str(item or "").strip()
+            if token:
+                tokens.append(token)
+        return tokens
+    tokens: list[str] = []
+    for part in str(value or "").split("|"):
+        token = part.strip()
+        if token:
+            tokens.append(token)
+    return tokens
+
+def _dedup_preserve(seq: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for item in seq:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+    return out
+
+def _site_groups_df() -> pd.DataFrame:
+    if "site_groups_df" not in st.session_state:
+        st.session_state.site_groups_df = read_site_groups()
+    return st.session_state.site_groups_df
+
+def _site_group_map() -> dict[str, list[str]]:
+    df = _site_groups_df()
+    mapping: dict[str, list[str]] = {}
+    for _, row in df.iterrows():
+        name = str(row.get("group_name") or "").strip()
+        if not name:
+            continue
+        mapping[name] = _split_site_string(row.get("sites", ""))
+    return mapping
+
+def _expand_site_tokens(tokens: Sequence[str]) -> list[str]:
+    if not tokens:
+        return []
+    mapping = _site_group_map()
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for raw in tokens:
+        token = str(raw or "").strip()
+        if not token or token in seen:
+            continue
+        if token == "*":
+            return ["*"]
+        group_name = ""
+        if token.startswith("@"):
+            group_name = token[1:].strip()
+        elif token.lower().startswith("group:"):
+            group_name = token.split(":", 1)[1].strip()
+        if group_name:
+            for site in mapping.get(group_name, []):
+                site_token = str(site or "").strip()
+                if not site_token or site_token in seen:
+                    continue
+                seen.add(site_token)
+                resolved.append(site_token)
+            continue
+        seen.add(token)
+        resolved.append(token)
+    return resolved
 def _user_allowed_sites() -> list[str]:
-    sites = st.session_state.user.get("sites","")
-    if not sites or sites=="*": return ["*"]
-    return [s.strip() for s in str(sites).split("|") if s.strip()]
+    raw = st.session_state.user.get("sites", "")
+    if not raw or str(raw).strip() == "*":
+        return ["*"]
+    tokens = _split_site_string(raw)
+    if not tokens:
+        return ["*"]
+    expanded = _expand_site_tokens(tokens)
+    return expanded or []
 
 def _user_allowed_tabs() -> list[str]:
     tabs = st.session_state.user.get("tabs","")
@@ -998,7 +1080,7 @@ def coerce_number(s: pd.Series) -> pd.Series:
     # to string
     s = s.astype(str)
 
-    # normalize whitespace & NBSP # Replace all occurrences of "â€”" with "-"
+    # normalize whitespace & NBSP # Replace all occurrences of "—" with "-"
     s = s.str.replace("\u00a0", " ", regex=False).str.strip()
     s = s.str.replace(r"\s+", " ", regex=True)
 
@@ -1051,7 +1133,7 @@ def annotate_low(df: pd.DataFrame, metric: str, threshold: float) -> pd.DataFram
     df = df.copy()
     if metric not in df.columns: df[metric] = np.nan
     df["Low_Flag"] = df[metric] < threshold
-    df["Low_Tag"]  = np.where(df["Low_Flag"], "ðŸ”´ Low", "")
+    df["Low_Tag"]  = np.where(df["Low_Flag"], "🔴 Low", "")
     return df
 _PAGE_SIZE = landscape(A4)
 _MARGINS = dict(left=18, right=18, top=18, bottom=18)
@@ -1140,7 +1222,7 @@ def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
     """
     url = f"https://api.github.com/repos/{repo}/contents/{folder}"
     try:
-        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20) # Replace all occurrences of "â€”" with "-"
+        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20) # Replace all occurrences of "—" with "-"
         if r.status_code != 200:
             # Bubble up readable diagnostics in UI
             try:
@@ -1234,9 +1316,9 @@ def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd
 
 # ---------------------- Load ----------------------
 # 1) Stop hitting GitHub on every rerun
-# Only fetch from GitHub when the admin presses a button; otherwise reuse whatâ€™s already loaded.
+# Only fetch from GitHub when the admin presses a button; otherwise reuse what’s already loaded.
 # after login/bootstrap:
-if "_raw_df_cache" not in st.session_state: # Replace all occurrences of "â€™" with "'"
+if "_raw_df_cache" not in st.session_state: # Replace all occurrences of "’" with "'"
     st.session_state._raw_df_cache = None
     st.session_state._raw_df_meta  = ""
 
@@ -1571,7 +1653,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         # minimal HTML escaping for reportlab paragraphs
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def _to_text(v, dash="â€”") -> str:
+    def _to_text(v, dash="—") -> str:
         if _is_nanlike(v):
             return dash
         try:
@@ -1609,7 +1691,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         header_table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('LINEBELOW', (0,0), (-1,-1), 1, colors.HexColor(BRAND_GREY)),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6), # Replace all occurrences of "â€”" with "-"
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6), # Replace all occurrences of "—" with "-"
         ]))
         story.append(header_table)
         story.append(Spacer(1, 4*mm))
@@ -1643,15 +1725,15 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         _dt_raw = _to_text(p.get("generated_at"))
         try:
             _dt_fmt = pd.to_datetime(_dt_raw)
-            gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14 # Replace all occurrences of "â€”" with "-"
+            gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14 # Replace all occurrences of "—" with "-"
         except Exception:
-            gen_at_fmt = _dt_raw if _dt_raw != "â€”" else "â€”"
+            gen_at_fmt = _dt_raw if _dt_raw != "—" else "—"
 
         dt_by_html = (
             f"<b>Date &amp; Time:</b> {_esc(gen_at_fmt)}"
             f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
             f"<b>Generated by:</b> {_esc(gen_by)}"
-        ) # Replace all occurrences of "â€”" with "-"
+        ) # Replace all occurrences of "—" with "-"
         story.append(Paragraph(dt_by_html, styles["Small"]))
         story.append(Spacer(1, 3*mm))
 
@@ -1668,7 +1750,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         pvt_tbl = Table(
             [
                 [
-                Paragraph("<b>Project:</b>", styles["Small"]), # Replace all occurrences of "â€”" with "-"
+                Paragraph("<b>Project:</b>", styles["Small"]), # Replace all occurrences of "—" with "-"
                 Paragraph(f"{_esc(proj_name)} ({_esc(proj_code)})", styles["Small"]),
                 Paragraph("<b>Vendor:</b>", styles["Small"]),
                 Paragraph(_esc(vendor), styles["Small"])
@@ -1699,7 +1781,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         try:
             d = pd.to_datetime(p.get("generated_at")).strftime("%d-%m-%Y")
         except Exception:
-            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "â€”" else "â€”" # Replace all occurrences of "â€”" with "-"
+            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "—" else "—" # Replace all occurrences of "—" with "-"
 
         # Escape description and stage
         desc = _esc(_to_text(p.get("description")))
@@ -1710,20 +1792,20 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         make_val = _to_text(p.get("make"))
         mat_qty = _to_text(p.get("material_quantity"))
         manufacturer = _to_text(p.get("manufacturer"))
-        if lot and lot != '—':
+        if lot and lot != '�':
             extras.append(f"Lot Number: {lot}")
-        if make_val and make_val != '—':
+        if make_val and make_val != '�':
             extras.append(f"Make: {make_val}")
-        if mat_qty and mat_qty != '—':
+        if mat_qty and mat_qty != '�':
             extras.append(f"Material Quantity: {mat_qty}")
-        if manufacturer and manufacturer != '—':
+        if manufacturer and manufacturer != '�':
             extras.append(f"Manufacturer: {manufacturer}")
         if extras:
             extras_html = '<br/>'.join(_esc(x) for x in extras)
             item_desc_text += '<br/>' + extras_html
 
         qty_val = _coerce_float(p.get("qty", ""))
-        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "â€”" # Replace all occurrences of "â€”" with "-"
+        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "—" # Replace all occurrences of "—" with "-"
 
         row_data = [
             "1",
@@ -1731,7 +1813,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             Paragraph(item_desc_text, styles["Cell"]),
             qty_str,
             _esc(_to_text(p.get("uom"))),
-            _esc(_to_text(p.get("date_casting"))), # Replace all occurrences of "â€”" with "-"
+            _esc(_to_text(p.get("date_casting"))), # Replace all occurrences of "—" with "-"
             _esc(_to_text(p.get("date_testing"))),
             Paragraph(_esc(_to_text(p.get("remarks"))), styles["Cell"])
         ]
@@ -1905,9 +1987,9 @@ def render_reprint_section(st, reqlog_df: pd.DataFrame, company_meta: Dict, key_
         key=f"{key_prefix}-refs"
     )
 
-    if refs and st.button("ðŸ–¨ï¸ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
+    if refs and st.button("🖨️ Build PDF for selected", type="primary", key=f"{key_prefix}-build"):
         rows = df_filtered[df_filtered["ref"].isin(refs)].sort_values("generated_at").to_dict(orient="records")
-        pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta) # Replace all occurrences of "ðŸ–¨ï¸" with "🖨️"
+        pdf_bytes = build_requirement_pdf_from_rows(rows, company_meta) # Replace all occurrences of "🖨️" with "???"
         st.download_button(
             "Download PDF (selected refs)",
             data=pdf_bytes,
@@ -2028,7 +2110,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
 
     # Export current view
     st.download_button(
-        "⬇️ Download my request log (CSV)",
+        "?? Download my request log (CSV)",
         data=view[show].to_csv(index=False).encode("utf-8"),
         file_name="my_requests_log.csv",
         mime="text/csv",
@@ -2037,7 +2119,7 @@ def render_my_requests_tab(st, user_email: str, reqlog_df: pd.DataFrame, company
 
     # ---------- Send Email to Vendor (Approved only) ----------
     st.markdown("---")
-    with st.expander("✉️ Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
+    with st.expander("?? Send Email to Vendor (Approved / Auto Approved only)", expanded=True):
         sendable_refs = view[view["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
         if not sendable_refs:
             st.caption("No Approved / Auto Approved requests in the current list.")
@@ -2184,10 +2266,10 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
         <td style="padding:6px;border:1px solid #ccc">1</td>
         <td style="padding:6px;border:1px solid #ccc">{d}</td>
         <td style="padding:6px;border:1px solid #ccc">{(r.get('description') or '')} (UOM: {(r.get('uom') or '')}; Stage: {(r.get('stage') or '')}){extras_html}</td>
-        <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td> # Replace all occurrences of "â€”" with "-"
-        <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or 'â€”'}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or 'â€”'}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or 'â€”'}</td>
+        <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td> # Replace all occurrences of "—" with "-"
+        <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or '—'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or '—'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or '—'}</td>
       </tr>
     </tbody>
   </table>
@@ -2200,25 +2282,25 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
 
 def render_registry_view_print_controls(st, df_filtered: pd.DataFrame, company_meta: Dict):
     """Renders single-ref 'View' (HTML preview) and 'Print' (PDF download) inside Requirements Registry tab."""
-    if df_filtered.empty: # Replace all occurrences of "ðŸ”Ž" with "🔍"
+    if df_filtered.empty: # Replace all occurrences of "🔎" with "??"
         st.caption("No records to view/print in current filter.")
         return
-    sel_ref = st.selectbox("Select a Reference to View / Print", [""] + df_filtered["ref"].astype(str).tolist(), key="reg-view-ref") # Replace all occurrences of "ðŸ”Ž" with "🔍"
+    sel_ref = st.selectbox("Select a Reference to View / Print", [""] + df_filtered["ref"].astype(str).tolist(), key="reg-view-ref") # Replace all occurrences of "🔎" with "??"
     if not sel_ref:
         return
     row = df_filtered[df_filtered["ref"] == sel_ref].head(1).to_dict(orient="records")[0]
-    with st.expander(f"ðŸ”Ž Preview - {sel_ref}", expanded=True):
+    with st.expander(f"🔎 Preview - {sel_ref}", expanded=True):
         html = requirement_row_to_html(row, company_meta)
         st.markdown(html, unsafe_allow_html=True)
-    if st.button("ðŸ–¨ï¸ Build PDF for this Reference", key="reg-view-print"):
+    if st.button("🖨️ Build PDF for this Reference", key="reg-view-print"):
         pdf_bytes = build_requirement_pdf_from_rows([row], company_meta)
         st.download_button("Download PDF (this ref)", data=pdf_bytes, file_name=f"{sel_ref.replace('/','_')}.pdf", mime="application/pdf", key="reg-view-print-dl")
 
 def render_registry_admin_actions(st, reqlog_df: pd.DataFrame, items_df: pd.DataFrame, company_meta: Dict, save_cb):
     st.markdown("### Admin Tools")
-    c1, c2 = st.columns([1,1]) # Replace all occurrences of "ðŸ”" with "🔄"
+    c1, c2 = st.columns([1,1]) # Replace all occurrences of "🔁" with "??"
     with c1:
-        if st.button("🔁 Run Post-CSV Auto-Approval sweep"):
+        if st.button("?? Run Post-CSV Auto-Approval sweep"):
             upd, n = run_post_csv_auto_approvals(reqlog_df, items_df)
             save_cb(upd)
             st.success(f"Auto-approved {n} record(s) where stock is now available.")
@@ -2234,12 +2316,16 @@ if "company_meta" not in st.session_state:
 if "company_logo" not in st.session_state:
     st.session_state.company_logo = None
 # Persisted app settings (GitHub lock, location)
+# Cached site groups
+if "site_groups_df" not in st.session_state:
+    st.session_state.site_groups_df = read_site_groups()
+
 if "app_settings" not in st.session_state:
     st.session_state.app_settings = read_app_settings()
 _ensure_reqlog_in_state()
 _login_block()
-# Replace all occurrences of "â€”" with "-"
-# Sidebar â€” Upload + Display + Branding
+# Replace all occurrences of "—" with "-"
+# Sidebar — Upload + Display + Branding
 with st.sidebar:
     st.header("Data Source")
 
@@ -2259,8 +2345,8 @@ with st.sidebar:
 
     else:
         # Non-admins are locked to GitHub
-        st.write("Using: **GitHub**") # Replace all occurrences of "â€”" with "-"
-        st.caption(f"{S['github_repo']} â€” {S['github_branch']} â€” /{S['github_folder']}")
+        st.write("Using: **GitHub**") # Replace all occurrences of "—" with "-"
+        st.caption(f"{S['github_repo']} — {S['github_branch']} — /{S['github_folder']}")
         S["data_source"] = "github"
 
     st.markdown("---")
@@ -2302,7 +2388,7 @@ with st.sidebar:
         st.session_state.filter_state["low_threshold"] = low_threshold_choice
 
 if _user_is_master_admin():
-    with st.sidebar.expander("🏷️ Company & Branding (Admin)"):
+    with st.sidebar.expander("??? Company & Branding (Admin)"):
         name = st.text_input("Company Name", st.session_state.company_meta["name"])
         addr1 = st.text_input("Address line 1", st.session_state.company_meta["address_lines"][0])
         addr2 = st.text_input("Address line 2", st.session_state.company_meta["address_lines"][1])
@@ -2310,7 +2396,7 @@ if _user_is_master_admin():
         if st.button("Apply", key="company-apply"):
             st.session_state.company_meta = {"name":name,"address_lines":[addr1,addr2], "logo_path_or_url": logo_path}
             st.success("Brand details applied.")
-    with st.sidebar.expander("⚙️ Data Source (Admin)", expanded=False):
+    with st.sidebar.expander("?? Data Source (Admin)", expanded=False):
         S = st.session_state.app_settings
         use_gh = st.checkbox("Use GitHub as the ONLY data source", value=S.get("use_github", True), key="adm-use-gh")
         repo   = st.text_input("Repo (owner/repo)", value=S.get("github_repo","dnyanesh57/NC_Dashboard"), key="adm-gh-repo")
@@ -2323,7 +2409,7 @@ if _user_is_master_admin():
             st.session_state.app_settings = read_app_settings()
             st.success("Data source settings saved.")
             st.rerun()
-    with st.sidebar.expander("🔍 GitHub Diagnostics", expanded=False):
+    with st.sidebar.expander("?? GitHub Diagnostics", expanded=False):
         S = st.session_state.app_settings
         if st.button("Test GitHub connection", key="gh-test"):
             try:
@@ -2344,7 +2430,7 @@ if _user_is_master_admin():
 if S["data_source"] == "github":
     c1, c2 = st.columns([1,1])
     with c1:
-        reload_gh = st.button("🔄 Reload from GitHub", key="gh-reload")
+        reload_gh = st.button("?? Reload from GitHub", key="gh-reload")
     with c2:
         st.caption(st.session_state._raw_df_meta or "No file loaded yet.")
 
@@ -2466,7 +2552,7 @@ LINE_COLS_BASE = [
 ]
 
 all_tab_names = [
-    "Overview", "Group: WO â†’ Project", "Work Order Explorer", "Lifecycle",
+    "Overview", "Group: WO → Project", "Work Order Explorer", "Lifecycle",
     "Subcontractor Summary", "Browse", "Status as on Date", "Export", "Email Drafts", "Diagnostics",
     "Raise Requirement", "My Requests", "Requirements Registry", "Admin"
 ]
@@ -2509,7 +2595,7 @@ def render_grouped_lines(
         return
 
     for g1_val, df_g1 in df.groupby(g1, dropna=False):
-        with st.expander(f"{g1.replace('_',' ')}: {g1_val if pd.notna(g1_val) else 'â€”'}", expanded=False):
+        with st.expander(f"{g1.replace('_',' ')}: {g1_val if pd.notna(g1_val) else '—'}", expanded=False):
             for g2_val, df_g2 in df_g1.groupby(g2, dropna=False):
                 header = _header_text(g1_val, g2_val, df_g2)
                 st.markdown(f"**{header}**")
@@ -2527,23 +2613,23 @@ for i, tab_label in enumerate(visible_tabs):
                 m2.metric("Vendors", items_f["Subcontractor_Key"].nunique())
                 m3.metric("Work Orders", s["WO_Key"].nunique() if not s.empty else 0)
                 m4.metric("Lines (Items)", items_f["Line_Key"].nunique())
-                m5.metric("Î£ Revised", f"{float(s['Revised_Qty'].sum() if not s.empty else 0):,.2f}")
+                m5.metric("Σ Revised", f"{float(s['Revised_Qty'].sum() if not s.empty else 0):,.2f}")
                 m6.metric("Low items", int(items_f["Low_Flag"].sum() if "Low_Flag" in items_f.columns else 0))
 
                 if not proj_agg.empty:
                     st.subheader("Project-wise Quantities")
                     fig = px.bar(proj_agg.melt(id_vars="Project_Key", var_name="Kind", value_name="Qty"),
                                  x="Project_Key", y="Qty", color="Kind", barmode="group",
-                                 title="Î£ Quantities by Project")
+                                 title="Σ Quantities by Project")
                     fig.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig, use_container_width=True, key="ov-bar")
                 else:
                     st.info("No project data to display.")
 
 
-                st.subheader("Grouped Lines â€” Project â†’ Work Order")
+                st.subheader("Grouped Lines — Project → Work Order")
                 q = st.text_input("Search (WO / Desc / Stage)", "", key="ov-q").strip().lower()
                 cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty"]
-                cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols") # Replace all occurrences of "â€”" with "-"
+                cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols") # Replace all occurrences of "—" with "-"
 
                 view = items_f.copy()
                 if q:
@@ -2562,11 +2648,11 @@ for i, tab_label in enumerate(visible_tabs):
                     title_fmt="WO: {g2} - Lines: {lines} | Initial: {init}  +Remeas: {rmc}  Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                     key_prefix="ov", suppress_outer=(len(f_projects)==1), thr_text=f"{low_threshold:g}"
                 )
-        elif tab_label == "Group: WO â†’ Project":
+        elif tab_label == "Group: WO → Project":
             # 3) Debounce text inputs (they cause a rerun on each keystroke)
             # Wrap search fields into forms so they rerun only on submit.
-            if can_view("Group: WO â†’ Project"):
-                st.subheader("Grouped Lines â€” Project â†’ Work Order")
+            if can_view("Group: WO → Project"):
+                st.subheader("Grouped Lines — Project → Work Order")
                 with st.form("group-wo-project-search"):
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="gp-q")
                     submitted = st.form_submit_button("Apply")
@@ -2589,7 +2675,7 @@ for i, tab_label in enumerate(visible_tabs):
                 ) # usage: paginated_df(view[inner_cols], key="gp")
         elif tab_label == "Work Order Explorer":
             if can_view("Work Order Explorer"):
-                st.subheader("Explorer â€” Grouped Lines (Project â†’ Work Order)")
+                st.subheader("Explorer — Grouped Lines (Project → Work Order)")
                 with st.form("work-order-explorer-search"):
                     q = st.text_input("Search (WO / Title / Desc / UOM / Stage)", "", key="ex-q")
                     submitted = st.form_submit_button("Apply")
@@ -2662,7 +2748,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"**Project:** {r.get('Project_Key','')}")
                                     st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
                                     st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
-                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}") # Replace all occurrences of "â€”" with "-"
+                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}") # Replace all occurrences of "—" with "-"
                                     st.write(f"**Desc:** {r.get('OD_Description','')}")
                                     if r.get("Remaining_Qty", np.nan) < low_threshold:
                                         st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
@@ -2673,13 +2759,13 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"Used (Cert.): {r['Used_Qty']:.3f}")
                                     st.write(f"Remaining: {r['Remaining_Qty']:.3f}")
                                 with c3:
-                                    st.markdown("**Instruction (II_) & Dates**") # Replace all occurrences of "âˆ’" with "-"
+                                    st.markdown("**Instruction (II_) & Dates**") # Replace all occurrences of "−" with "-"
                                     st.write(f"WO Title: {r.get('OI_Title','')}")
                                     st.write(f"II Title: {r.get('II_Title.1','')}  |  Nature: {r.get('II_Nature Name','')}")
                                     st.write(f"Approval: {r.get('II_Approval Status','')}")
                                     st.write(f"WO Date: {str(r.get('OI_Date',''))}  |  II Date: {str(r.get('II_Date.1',''))}")
 
-                                wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (âˆ’)","Remaining"],
+                                wf_df = pd.DataFrame({"Stage":["Initial","Remeasure (+)","Revised","Used (−)","Remaining"],
                                                       "Value":[r["Initial_Qty"], r["Remeasure_Add"], r["Revised_Qty"]-(r["Initial_Qty"]+r["Remeasure_Add"]), -r["Used_Qty"], r["Remaining_Qty"]]})
                                 fig_wf = go.Figure(go.Waterfall(x=wf_df["Stage"], measure=["relative"]*5, y=wf_df["Value"], connector={"line":{"width":1}}))
                                 fig_wf.update_layout(title="Lifecycle Waterfall (Qty)", yaxis_title="Quantity"); st.plotly_chart(fig_wf, use_container_width=True, key="lc-wf") # type: ignore
@@ -2694,10 +2780,10 @@ for i, tab_label in enumerate(visible_tabs):
                     sub_agg = summary_f.groupby("Subcontractor_Key", dropna=False)[["Initial_Qty","Revised_Qty","Used_Qty","Remaining_Qty"]].sum().reset_index()
                     fig2 = px.bar(sub_agg.melt(id_vars="Subcontractor_Key", var_name="Kind", value_name="Qty"),
                                   x="Subcontractor_Key", y="Qty", color="Kind", barmode="group",
-                                  title="Î£ Quantities by Vendor")
+                                  title="Σ Quantities by Vendor")
                     fig2.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig2, use_container_width=True, key="sub-bar")
 
-                    st.subheader("Grouped Lines â€” Vendor â†’ Work Order") # type: ignore
+                    st.subheader("Grouped Lines — Vendor → Work Order") # type: ignore
                 with st.form("subcontractor-summary-search"):
 
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="sub-q").strip().lower()
@@ -2718,8 +2804,8 @@ for i, tab_label in enumerate(visible_tabs):
 
                     render_grouped_lines(
                         view.sort_values(["Subcontractor_Key","WO_Key","Line_Key"]),
-                        ("Subcontractor_Key","WO_Key"), cols_pick, # Replace all occurrences of "â€”" with "-"
-                        title_fmt="WO: {g2} â€” Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                        ("Subcontractor_Key","WO_Key"), cols_pick, # Replace all occurrences of "—" with "-"
+                        title_fmt="WO: {g2} — Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                         key_prefix="sub", suppress_outer=False, thr_text=f"{low_threshold:g}"
                     )
                 submitted = st.form_submit_button("Apply")
@@ -2734,7 +2820,7 @@ for i, tab_label in enumerate(visible_tabs):
                 st.dataframe(prev.head(200), use_container_width=True, hide_index=True)
         elif tab_label == "Status as on Date":
             if can_view("Status as on Date"):
-                st.subheader("Status as on Date â€” Grouped Lines (Project â†’ Work Order)")
+                st.subheader("Status as on Date — Grouped Lines (Project → Work Order)")
                 as_on_date = st.date_input("Select date", pd.Timestamp.today().date(), key="as-on-date")
                 as_on_ts = pd.Timestamp(as_on_date)
                 view = items_f[(items_f["OI_Date"].notna()) & (items_f["OI_Date"] <= as_on_ts)].copy() if "OI_Date" in items_f.columns else items_f.copy()
@@ -2761,8 +2847,8 @@ for i, tab_label in enumerate(visible_tabs):
 
                 init, rmc, rev, used, rem, lines, low = group_totals(view)
                 cA, cB, cC, cD, cE = st.columns(5)
-                cA.metric("Active WOs (â‰¤ date)", view["WO_Key"].nunique()); cB.metric("Active Lines", lines)
-                cC.metric("Î£ Revised (current)", f"{rev:,.2f}"); cD.metric("Î£ Used (current)", f"{used:,.2f}"); cE.metric("Î£ Remaining (current)", f"{rem:,.2f}")
+                cA.metric("Active WOs (≤ date)", view["WO_Key"].nunique()); cB.metric("Active Lines", lines)
+                cC.metric("Σ Revised (current)", f"{rev:,.2f}"); cD.metric("Σ Used (current)", f"{used:,.2f}"); cE.metric("Σ Remaining (current)", f"{rem:,.2f}")
 
                 render_grouped_lines(
                     view, ("Project_Key","WO_Key"), cols_pick,
@@ -2773,7 +2859,7 @@ for i, tab_label in enumerate(visible_tabs):
                 if not submitted:
                     q = st.session_state.get("as-q", "")
                 st.download_button(
-                    "Download CSV â€” Status as on Date (line-wise)",
+                    "Download CSV — Status as on Date (line-wise)",
                     data=view[[c for c in cols_pick if c in view.columns]].to_csv(index=False).encode("utf-8"),
                     file_name=f"wo_status_as_on_{as_on_ts.date()}.csv", mime="text/csv", key="dl-as-on"
                 )
@@ -2781,7 +2867,7 @@ for i, tab_label in enumerate(visible_tabs):
             if not _user_can("can_export"):
                 st.warning("You do not have permission to access Export.")
             elif can_view("Export"):
-                st.subheader("Export â€” CSV & PDF (grouped)")
+                st.subheader("Export — CSV & PDF (grouped)")
                 exp_date_toggle = st.checkbox("Apply 'as on date' filter to exports", value=False, key="exp-date-tgl")
                 if exp_date_toggle:
                     exp_as_on = st.date_input("As on date for export", pd.Timestamp.today().date(), key="exp-as-on")
@@ -2828,27 +2914,27 @@ for i, tab_label in enumerate(visible_tabs):
                 pdf_cols_pick = st.multiselect("Columns in PDF line tables", pdf_cols_options, default=pdf_cols_default, key="pdf-cols")
 
                 if pdf_mode == "All Projects":
-                    pdf_bytes = pdf_grouped_lines(base_items, mode="all_projects", selected=None, line_cols=pdf_cols_pick, title_suffix="â€” All Projects", alert_col=low_metric, threshold=low_threshold)
-                    st.download_button("Download PDF â€” All Projects", data=pdf_bytes, file_name="SJCPL_WO_AllProjects.pdf", mime="application/pdf", key="pdf-all")
+                    pdf_bytes = pdf_grouped_lines(base_items, mode="all_projects", selected=None, line_cols=pdf_cols_pick, title_suffix="— All Projects", alert_col=low_metric, threshold=low_threshold)
+                    st.download_button("Download PDF — All Projects", data=pdf_bytes, file_name="SJCPL_WO_AllProjects.pdf", mime="application/pdf", key="pdf-all")
                 elif pdf_mode == "By Project":
                     selp = st.multiselect("Select Project(s)", sorted(base_items["Project_Key"].dropna().unique()), default=sorted(base_items["Project_Key"].dropna().unique()), key="pdf-proj-sel")
                     if selp:
-                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_project", selected=selp, line_cols=pdf_cols_pick, title_suffix="â€” Project-wise", alert_col=low_metric, threshold=low_threshold)
-                        st.download_button("Download PDF â€” Project-wise", data=pdf_bytes, file_name="SJCPL_WO_ProjectWise.pdf", mime="application/pdf", key="pdf-proj")
+                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_project", selected=selp, line_cols=pdf_cols_pick, title_suffix="— Project-wise", alert_col=low_metric, threshold=low_threshold)
+                        st.download_button("Download PDF — Project-wise", data=pdf_bytes, file_name="SJCPL_WO_ProjectWise.pdf", mime="application/pdf", key="pdf-proj")
                     else:
                         st.info("Select at least one project.")
                 else:
                     sels = st.multiselect("Select Subcontractor(s)", sorted(base_items["Subcontractor_Key"].dropna().unique()), default=sorted(base_items["Subcontractor_Key"].dropna().unique()), key="pdf-sub-sel")
                     if sels:
-                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_sub", selected=sels, line_cols=pdf_cols_pick, title_suffix="â€” Subcontractor-wise", alert_col=low_metric, threshold=low_threshold)
-                        st.download_button("Download PDF â€” Subcontractor-wise", data=pdf_bytes, file_name="SJCPL_WO_SubcontractorWise.pdf", mime="application/pdf", key="pdf-sub")
+                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_sub", selected=sels, line_cols=pdf_cols_pick, title_suffix="— Subcontractor-wise", alert_col=low_metric, threshold=low_threshold)
+                        st.download_button("Download PDF — Subcontractor-wise", data=pdf_bytes, file_name="SJCPL_WO_SubcontractorWise.pdf", mime="application/pdf", key="pdf-sub")
                     else:
                         st.info("Select at least one subcontractor.")
         elif tab_label == "Email Drafts":
             if not _user_can("can_email_drafts"):
                 st.warning("You do not have permission to access Email Drafts.")
             elif can_view("Email Drafts"):
-                st.subheader("Email Drafts â€” Project-wise & Vendor-wise (tables + HTML/PDF/CSV)")
+                st.subheader("Email Drafts — Project-wise & Vendor-wise (tables + HTML/PDF/CSV)")
                 draft_date = st.date_input("Date for subject/body", pd.Timestamp.today().date(), key="draft-date")
                 only_low = st.checkbox("Show only Low items in drafts", value=False, key="draft-only-low")
                 ason_toggle = st.checkbox("Use 'Status as on Date' filter for drafts", value=False, key="draft-as-on")
@@ -2869,7 +2955,7 @@ for i, tab_label in enumerate(visible_tabs):
                 missing = [c for c in expected_post_rename if not best_col(renamed_preview, c)]
                 st.write(f"Rows in file: {len(raw_df):,}")
                 st.write(f"Rows considered as 'items': {len(items_df):,}  (filter used: {getattr(items_df, '_lt_filter_note', 'n/a')})")
-                st.write(f"Detected key columns: {present if present else 'â€”'}")
+                st.write(f"Detected key columns: {present if present else '—'}")
                 if missing: st.warning(f"Missing/alias columns not found (fallbacks used or set to NaN): {missing}")
                 st.dataframe(renamed_preview.head(30), use_container_width=True, hide_index=True)
         elif tab_label == "Raise Requirement":
@@ -2960,7 +3046,7 @@ for i, tab_label in enumerate(visible_tabs):
                     if approval_required:
                         st.warning("Approval required: " + ("Requested qty exceeds Remaining." if approval_reason == "low_qty" else "New item."))
 
-                    if st.button("➕ Add line to request", type="primary", key="rq-add"):
+                    if st.button("? Add line to request", type="primary", key="rq-add"):
                         if qty <= 0:
                             st.error("Quantity must be greater than 0.")
                         #elif not date_cast or not date_test:
@@ -3011,14 +3097,14 @@ for i, tab_label in enumerate(visible_tabs):
                             
                     if st.session_state.req_cart: # If cart is not empty
                         st.markdown("---")
-                        st.markdown("### Current Request â€” Line Items")
+                        st.markdown("### Current Request — Line Items")
                         cart_df = pd.DataFrame(st.session_state.req_cart)
                         st.dataframe(cart_df, use_container_width=True, hide_index=True)
 
                         needs_approval_now = any(bool(item.get("approval_required")) for item in st.session_state.req_cart)
                         cc1, cc2, cc3 = st.columns(3)
                         with cc1:
-                            if st.button("🗑️ Clear  cart", key="rq-clear"):
+                            if st.button("??? Clear  cart", key="rq-clear"):
                                 st.session_state.req_cart = []
                                 st.rerun()
                         with cc2:
@@ -3050,7 +3136,7 @@ for i, tab_label in enumerate(visible_tabs):
                             # Persist rows one-by-one using UPSERT on ref
                             if used_rows:
                                 try:
-                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE â€¦
+                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE …
                                     # refresh from DB so the grid shows the authoritative data
                                     st.session_state.reqlog_df = read_reqlog_df()
                                 except Exception as e:
@@ -3064,7 +3150,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
                                     mime="application/pdf", key="rq-pdf")
                                 if reused_map:
-                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) â€” existing references were reused.")
+                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) — existing references were reused.")
 
                                 # Decide post-generation emailing behaviour
                                 reused_refs = set(reused_map.values()) if reused_map else set()
@@ -3089,7 +3175,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     elif email_vendor_after and not refs_generated:
                                         st.info("Vendor email skipped because no new references were generated.")
                                     else:
-                                        st.success("This request is already approved. You can email the vendor from â€˜My Requestsâ€™ (or Requirements Registry).")
+                                        st.success("This request is already approved. You can email the vendor from ‘My Requests’ (or Requirements Registry).")
                                     if not email_vendor_after:
                                         st.info("Vendor email skipped; use 'My Requests' or 'Requirements Registry' to send it later.")
                                 else:
@@ -3218,7 +3304,7 @@ for i, tab_label in enumerate(visible_tabs):
                 if status_pick: df = df[df["status"].isin(status_pick)]
 
                 st.dataframe(df.sort_values("generated_at", ascending=False), use_container_width=True, hide_index=True)
-                st.download_button("⬇️ Download Registry (CSV)", data=df.to_csv(index=False).encode("utf-8"),
+                st.download_button("?? Download Registry (CSV)", data=df.to_csv(index=False).encode("utf-8"),
                                   file_name="requirements_registry.csv", mime="text/csv", key="reg-dl")
 
                 st.markdown("### View / Print a Raised Requirement")
@@ -3245,9 +3331,9 @@ for i, tab_label in enumerate(visible_tabs):
                     # Toggles: vendor OFF by default, requester ON by default
                     colA, colB, colC, colD = st.columns([1,1,1,2])
                     with colA:
-                        do_approve = st.button("✅ Approve", type="primary", key="admin-approve-btn")
+                        do_approve = st.button("? Approve", type="primary", key="admin-approve-btn")
                     with colB:
-                        do_reject = st.button("❌ Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
+                        do_reject = st.button("? Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
                         send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
                     with colD:
                         send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
@@ -3294,7 +3380,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 try:
                                     v_email = get_vendor_email(vendor_key)
                                     if not v_email:
-                                        st.warning(f"No vendor email configured for: {vendor_key}. (Admin â†’ Vendor Contacts)")
+                                        st.warning(f"No vendor email configured for: {vendor_key}. (Admin → Vendor Contacts)")
                                         continue # Skip if no email found
  
                                     site_name = bucket[0].get('project_name') or bucket[0].get('project_code', '')
@@ -3324,10 +3410,10 @@ for i, tab_label in enumerate(visible_tabs):
                                         pass
  
                                     if ok_mail: sent_ok += 1 # Count successful sends
-                                    else: sent_err.append(f"{vendor_key} â†’ {v_email}: {msg_mail}")
+                                    else: sent_err.append(f"{vendor_key} → {v_email}: {msg_mail}")
  
                                 except Exception as e:
-                                    sent_err.append(f"{vendor_key} â†’ {v_email or '-'}: {e}")
+                                    sent_err.append(f"{vendor_key} → {v_email or '-'}: {e}")
                                     continue
  
                             if sent_ok:
@@ -3350,7 +3436,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
                                 sent_ok_r, sent_err_r = 0, []
                                 for remail, bucket in by_requester.items():
-                                    subject = f"[SJCPL] Your request was Approved â€” {bucket[0].get('project_code','')} â€” {len(bucket)} item(s)"
+                                    subject = f"[SJCPL] Your request was Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -3390,7 +3476,7 @@ for i, tab_label in enumerate(visible_tabs):
                         st.rerun()
 
                 # NEW: Separate expander for Send Email to Vendor (only for Approved / Auto Approved)
-                with st.expander("📧 Send Email to Vendor (Approved items only)", expanded=False):
+                with st.expander("?? Send Email to Vendor (Approved items only)", expanded=False):
                     refs_all = df[df["status"].isin(["Approved","Auto Approved"])]["ref"].astype(str).tolist()
                     refs_pick = st.multiselect("Select ref(s)", refs_all, key="reg-email-refs")
                     if st.button("Send vendor email", key="reg-email-btn"):
@@ -3402,31 +3488,128 @@ for i, tab_label in enumerate(visible_tabs):
                 _ensure_acl_in_state()
                 st.dataframe(st.session_state.acl_df, use_container_width=True, hide_index=True)
 
-                with st.expander("➕ Add / Update User", expanded=False):
-                    available_sites = sorted(items_df["Project_Key"].dropna().unique().tolist()) if not items_df.empty else []
-                    site_choices = ["*"] + available_sites
-                    tab_choices = [t for t in all_tab_names if t != "Admin"] + ["*"]
+                # Precompute site metadata for admin forms
+                available_sites = sorted(items_df["Project_Key"].dropna().unique().tolist()) if not items_df.empty else []
+                site_group_map = _site_group_map()
+                site_group_names = sorted(site_group_map.keys())
+                site_choices = ["*"] + available_sites
+                tab_choices = [t for t in all_tab_names if t != "Admin"] + ["*"]
 
+                with st.expander("?? Site Groups", expanded=False):
+                    sg_df = _site_groups_df()
+                    if not sg_df.empty:
+                        display_df = sg_df.copy()
+                        display_df["Site count"] = display_df["sites"].apply(lambda s: len(_split_site_string(s)))
+                        display_df["Sites"] = display_df["sites"].apply(lambda s: ", ".join(_split_site_string(s)))
+                        st.dataframe(
+                            display_df[["group_name", "Site count", "Sites", "updated_at", "updated_by"]].rename(
+                                columns={"group_name": "Group", "updated_at": "Updated", "updated_by": "Updated by"}
+                            ),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("No site groups yet. Create one using the form below.")
+
+                    st.session_state.setdefault("site-group-name", "")
+                    st.session_state.setdefault("site-group-sites", [])
+                    st.session_state.setdefault("site-group-extra", "")
+                    st.session_state.setdefault("site-group-select", "<New group>")
+                    st.session_state.setdefault("_site_group_last", "<New group>")
+
+                    group_options = ["<New group>"] + site_group_names
+                    group_choice = st.selectbox("Select group to edit", group_options, key="site-group-select")
+                    if st.session_state.get("_site_group_last") != group_choice:
+                        st.session_state["_site_group_last"] = group_choice
+                        if group_choice == "<New group>":
+                            st.session_state["site-group-name"] = ""
+                            st.session_state["site-group-sites"] = []
+                            st.session_state["site-group-extra"] = ""
+                        else:
+                            base_sites = site_group_map.get(group_choice, [])
+                            from_dataset = [s for s in base_sites if s in available_sites]
+                            extra_sites = [s for s in base_sites if s not in available_sites]
+                            st.session_state["site-group-name"] = group_choice
+                            st.session_state["site-group-sites"] = from_dataset
+                            st.session_state["site-group-extra"] = "".join(extra_sites)
+
+                    group_name = st.text_input("Group name", key="site-group-name")
+                    selected_sites = st.multiselect("Sites (choose from current data)", available_sites, key="site-group-sites")
+                    extra_input = st.text_area(
+                        "Additional site codes (one per line)",
+                        key="site-group-extra",
+                        placeholder="Enter site codes not present in the dataset, one per line",
+                    )
+
+                    extra_tokens = []
+                    for raw_line in str(extra_input).replace(",", "").splitlines():
+                        token = raw_line.strip()
+                        if token:
+                            extra_tokens.append(token)
+
+                    combined_sites = _dedup_preserve(selected_sites + extra_tokens)
+
+                    col_save, col_delete = st.columns([3, 1])
+                    with col_save:
+                        if st.button("Save site group", type="primary", key="site-group-save"):
+                            if not group_name.strip():
+                                st.error("Group name is required.")
+                            elif not combined_sites:
+                                st.error("Add at least one site before saving.")
+                            else:
+                                try:
+                                    upsert_site_group(
+                                        group_name.strip(),
+                                        combined_sites,
+                                        by_email=st.session_state.get("user", {}).get("email"),
+                                    )
+                                    st.session_state.site_groups_df = read_site_groups()
+                                    st.session_state["_site_group_last"] = group_name.strip()
+                                    st.session_state["site-group-select"] = group_name.strip()
+                                    st.success("Site group saved.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Save failed: {e}")
+                    with col_delete:
+                        if group_choice != "<New group>":
+                            if st.button("Delete", key="site-group-delete"):
+                                try:
+                                    delete_site_group(group_choice)
+                                    st.session_state.site_groups_df = read_site_groups()
+                                    st.session_state["_site_group_last"] = "<New group>"
+                                    st.session_state["site-group-select"] = "<New group>"
+                                    st.session_state["site-group-name"] = ""
+                                    st.session_state["site-group-sites"] = []
+                                    st.session_state["site-group-extra"] = ""
+                                    st.success("Site group deleted.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Delete failed: {e}")
+                        else:
+                            st.write("")
+
+                with st.expander("? Add / Update User", expanded=False):
                     a1, a2 = st.columns(2)
                     email = a1.text_input("Email", key="admin-email")
                     name = a1.text_input("Name", key="admin-name")
                     role = a1.selectbox("Role", ["master_admin", "site_admin", "user"], key="admin-role")
 
-                    fast_col1, fast_col2 = st.columns([1,1])
+                    fast_col1, fast_col2 = st.columns([1, 1])
                     with fast_col1:
                         sites_quick = st.selectbox("Quick pick sites", ["Custom", "All Sites", "None", "Matches keyword"], index=0, key="admin-sites-quick")
                     with fast_col2:
                         sites_keyword = st.text_input("Keyword (for Matches)", "", key="admin-sites-keyword")
 
                     sites_multi = a2.multiselect("Sites (choose one or more, or * for all)", site_choices, default=["*"] if "*" in site_choices else [], key="admin-sites")
-                    tabs_multi  = a2.multiselect("Tabs (choose one or more, or * for all)", tab_choices, default=["*"], key="admin-tabs")
+                    site_groups_multi = a2.multiselect("Site groups (optional)", site_group_names, key="admin-site-groups")
+                    tabs_multi = a2.multiselect("Tabs (choose one or more, or * for all)", tab_choices, default=["*"], key="admin-tabs")
 
                     can_raise = st.checkbox("Can raise requests (otherwise view-only)", value=True, key="admin-can-raise")
                     can_view_registry = st.checkbox("Can view Requirements Registry", value=True, key="admin-can-view-reg")
                     can_export = st.checkbox("Can use Export tab", value=True, key="admin-can-export")
                     can_email_drafts = st.checkbox("Can use Email Drafts tab", value=True, key="admin-can-email")
 
-                    pwd   = st.text_input("Password (stored as SHA256 hash)", type="password", key="admin-pwd")
+                    pwd = st.text_input("Password (stored as SHA256 hash)", type="password", key="admin-pwd")
                     if st.button("Save User", type="primary", key="admin-save-user"):
                         if not email:
                             st.error("Email required.")
@@ -3434,27 +3617,40 @@ for i, tab_label in enumerate(visible_tabs):
                             ph = _sha256_hex(pwd) if pwd else None
                             dfu = st.session_state.acl_df.copy()
 
+                            group_tokens = [f"@{g.strip()}" for g in site_groups_multi if g.strip()]
                             if sites_quick == "All Sites":
-                                sites_val = "*"
+                                site_tokens = ["*"]
                             elif sites_quick == "None":
-                                sites_val = ""
+                                site_tokens = []
                             elif sites_quick == "Matches keyword":
                                 if sites_keyword.strip():
                                     matches = [s for s in available_sites if sites_keyword.strip().lower() in str(s).lower()]
-                                    sites_val = "|".join(matches)
+                                    site_tokens = matches
                                 else:
-                                    sites_val = "|".join(sites_multi)
+                                    site_tokens = list(sites_multi)
                             else:
-                                sites_val = "*" if "*" in sites_multi else "|".join(sites_multi)
+                                site_tokens = ["*"] if "*" in sites_multi else list(sites_multi)
+
+                            if "*" in site_tokens:
+                                combined_tokens = ["*"]
+                            else:
+                                combined_tokens = _dedup_preserve(site_tokens + group_tokens)
+
+                            if not combined_tokens:
+                                sites_val = ""
+                            elif combined_tokens == ["*"]:
+                                sites_val = "*"
+                            else:
+                                sites_val = "|".join(combined_tokens)
 
                             tabs_val = "*" if "*" in tabs_multi else "|".join(tabs_multi)
 
                             if (dfu["email"] == email).any():
                                 if name:
                                     dfu.loc[dfu["email"] == email, "name"] = name
-                                dfu.loc[dfu["email"] == email, "role"]  = role
+                                dfu.loc[dfu["email"] == email, "role"] = role
                                 dfu.loc[dfu["email"] == email, "sites"] = sites_val
-                                dfu.loc[dfu["email"] == email, "tabs"]  = tabs_val
+                                dfu.loc[dfu["email"] == email, "tabs"] = tabs_val
                                 dfu.loc[dfu["email"] == email, "can_raise"] = bool(can_raise)
                                 dfu.loc[dfu["email"] == email, "can_view_registry"] = bool(can_view_registry)
                                 dfu.loc[dfu["email"] == email, "can_export"] = bool(can_export)
@@ -3466,26 +3662,31 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.error("Password required for new user.")
                                     st.stop()
                                 new_user_data = {
-                                    "email": email, "name": name, "role": role, "sites": sites_val,
-                                    "tabs": tabs_val, "can_raise": bool(can_raise),
-									"can_view_registry": bool(can_view_registry), "can_export": bool(can_export),
+                                    "email": email,
+                                    "name": name,
+                                    "role": role,
+                                    "sites": sites_val,
+                                    "tabs": tabs_val,
+                                    "can_raise": bool(can_raise),
+                                    "can_view_registry": bool(can_view_registry),
+                                    "can_export": bool(can_export),
                                     "can_email_drafts": bool(can_email_drafts),
-                                    "password_hash": ph
+                                    "password_hash": ph,
                                 }
                                 dfu = pd.concat([dfu, pd.DataFrame([new_user_data])], ignore_index=True)
-                            
+
                             st.session_state.acl_df = dfu
                             write_acl_df(dfu)
                             st.success("User saved.")
-                
-                # Admin UI: master-adminâ€“only Vendor Contacts manager
-                with st.expander("📧 Vendor Contacts (DB-only, master admin)"):
+
+                # Admin UI: master-admin–only Vendor Contacts manager
+                with st.expander("?? Vendor Contacts (DB-only, master admin)"):
                     try:
                         vdf = read_vendor_contacts()
                     except Exception as e:
                         vdf = pd.DataFrame(columns=["vendor","email"])
                         st.error(f"Failed to read vendor contacts: {e}")
-                    st.caption("Map Subcontractor_Key â†’ Vendor email. Only stored in the database.")
+                    st.caption("Map Subcontractor_Key → Vendor email. Only stored in the database.")
                     st.dataframe(vdf, use_container_width=True, hide_index=True)
 
                     with st.form("vendor-email-upsert"):
@@ -3503,7 +3704,7 @@ for i, tab_label in enumerate(visible_tabs):
                             except Exception as e:
                                 st.error(f"Save failed: {e}")
 
-                with st.expander("✅  Approval Recipients (master admin)"):
+                with st.expander("?  Approval Recipients (master admin)"):
                     st.caption("Recipients here will receive emails when a request is Pending Admin Approval.")
                     # Load current recipients
                     try:
@@ -3562,11 +3763,11 @@ for i, tab_label in enumerate(visible_tabs):
 
                     st.markdown("""
                     <div style="font-size:12px;color:#555;line-height:1.5">
-                        <b>Scoping rules (most specific â†’ least):</b><br/>
-                        (project_code, vendor_key, request_type) â†’ (project_code, vendor_key, NULL) â†’
-                        (project_code, NULL, request_type) â†’ (NULL, vendor_key, request_type) â†’
-                        (project_code, NULL, NULL) â†’ (NULL, vendor_key, NULL) â†’
-                        (NULL, NULL, request_type) â†’ (NULL, NULL, NULL).
+                        <b>Scoping rules (most specific → least):</b><br/>
+                        (project_code, vendor_key, request_type) → (project_code, vendor_key, NULL) →
+                        (project_code, NULL, request_type) → (NULL, vendor_key, request_type) →
+                        (project_code, NULL, NULL) → (NULL, vendor_key, NULL) →
+                        (NULL, NULL, request_type) → (NULL, NULL, NULL).
                     </div>
                     """, unsafe_allow_html=True)
                 # Add SMTP Diagnostics
@@ -3586,8 +3787,8 @@ for i, tab_label in enumerate(visible_tabs):
                             s.ehlo()
                         st.success(f"STARTTLS connection OK on {cfg['host']}:{cfg['port']}")
                     except Exception as e:
-                        st.warning(f"STARTTLS check failed on {cfg['host']}:{cfg['port']} â†’ {e}")
-                with st.expander("📮 SMTP Diagnostics"):
+                        st.warning(f"STARTTLS check failed on {cfg['host']}:{cfg['port']} → {e}")
+                with st.expander("?? SMTP Diagnostics"):
                     if st.button("Run SMTP connectivity check"):
                         smtp_connectivity_check()
                     st.caption("Tip: If both checks fail, your host likely blocks SMTP egress. Use an email API (SendG")
@@ -3595,7 +3796,7 @@ for i, tab_label in enumerate(visible_tabs):
 
 
 
-                with st.expander("🗑️ Remove User", expanded=False):
+                with st.expander("??? Remove User", expanded=False):
                     emails = sorted(st.session_state.acl_df["email"].tolist())
                     if emails:
                         rm = st.selectbox("Select user to remove", emails, key="admin-remove-email")
@@ -3604,7 +3805,7 @@ for i, tab_label in enumerate(visible_tabs):
                             write_acl_df(st.session_state.acl_df)
                             st.success("User removed.")
 
-                st.download_button("⬇️ Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
+                st.download_button("?? Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
                                   file_name="acl_users.csv", mime="text/csv", key="acl-dl")
 
                 st.subheader("Manage Enabled Tabs")
@@ -3621,4 +3822,6 @@ for i, tab_label in enumerate(visible_tabs):
 
 
 st.caption("&copy; SJCPL - Test Request and Approvals &mdash; V1")
+
+
 
