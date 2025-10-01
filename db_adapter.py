@@ -837,3 +837,62 @@ def write_company_meta(name: str, a1: str, a2: str):
             values (1, :n, :a1, :a2)
             on conflict (id) do update set name=:n, address_1=:a1, address_2=:a2
         """), {"n": name, "a1": a1, "a2": a2})
+
+# --- Subcontract Team Emails ---
+def ensure_subcontract_team_table() -> None:
+    """Create subcontract_team table if it doesn't exist."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS subcontract_team (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  email TEXT UNIQUE NOT NULL,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                  created_by TEXT
+                )
+            """))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS subcontract_team (
+                  id BIGSERIAL PRIMARY KEY,
+                  email TEXT UNIQUE NOT NULL,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                  created_by TEXT
+                )
+            """))
+
+def read_subcontract_team_emails() -> list[str]:
+    """Return a list of emails for the subcontract team."""
+    ensure_subcontract_team_table()
+    with _conn() as c:
+        rows = c.execute(text("SELECT email FROM subcontract_team ORDER BY lower(email)")).scalars().all()
+        return rows or []
+
+def add_subcontract_team_email(email: str, by_email: str | None = None) -> None:
+    """Add an email to the subcontract team, ignoring duplicates."""
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("Email is required")
+    ensure_subcontract_team_table()
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                INSERT INTO subcontract_team (email, created_by)
+                VALUES (:email, :by)
+                ON CONFLICT(email) DO NOTHING
+            """), {"email": email, "by": by_email})
+        else:
+            c.execute(text("""
+                INSERT INTO subcontract_team (email, created_by)
+                VALUES (:email, :by)
+                ON CONFLICT (email) DO NOTHING
+            """), {"email": email, "by": by_email})
+
+def delete_subcontract_team_email(email: str) -> None:
+    """Remove an email from the subcontract team."""
+    email = (email or "").strip().lower()
+    if not email:
+        return
+    ensure_subcontract_team_table()
+    with _conn() as c:
+        c.execute(text("DELETE FROM subcontract_team WHERE lower(email) = :email"), {"email": email})

@@ -25,6 +25,8 @@ from db_adapter import (
     
     read_app_settings, write_app_settings,   # NEW
     ensure_site_groups_table, read_site_groups, upsert_site_group, delete_site_group,
+    # Subcontract team
+    ensure_subcontract_team_table, read_subcontract_team_emails, add_subcontract_team_email, delete_subcontract_team_email,
 )
 import numpy as np
 import pandas as pd
@@ -125,6 +127,9 @@ _ensure_once("_site_groups_table_ready", ensure_site_groups_table, "DB init (sit
 
 # Ensure reqlog email columns exist
 _ensure_once("_reqlog_email_columns_ready", ensure_reqlog_email_columns, "Could not verify emailed_* columns on requirements_log", level="warning")
+
+# Ensure subcontract team table exists
+_ensure_once("_subcontract_team_table_ready", ensure_subcontract_team_table, "DB init (subcontract team table) failed")
 
 if "filter_state" not in st.session_state:
     st.session_state.filter_state = {
@@ -240,7 +245,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
             return False, "Gmail requires from_email == user. Set both to the same Gmail address."
     msg = _build_mime_message(cfg, to_email, subject, html_body, attachment_bytes, attachment_name)
 
-    context = ssl.create_default_context()
+    context = ssl.create_default_context(server_hostname=cfg["host"])
     last_err = None
 
     def _try_starttls():
@@ -252,7 +257,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
             server.sendmail(cfg["from_email"], [to_email], msg.as_string())
 
     def _try_ssl_465():
-        with smtplib.SMTP_SSL(cfg["host"], 465, timeout=cfg["timeout"], context=context, server_hostname=cfg["host"]) as server:
+        with smtplib.SMTP_SSL(cfg["host"], 465, timeout=cfg["timeout"], context=context) as server:
             server.ehlo()
             server.login(cfg["user"], cfg["password"])
             server.sendmail(cfg["from_email"], [to_email], msg.as_string())
@@ -3342,7 +3347,50 @@ for i, tab_label in enumerate(visible_tabs):
  
                     if (do_approve or do_reject) and not refs_to_act:
                         st.warning("Pick at least one reference.")
-                    elif do_approve or do_reject:
+                elif do_approve or do_reject:
+                        # --- NEW: Subcontract Team Notification Logic ---
+                        if do_approve:
+                            subcontract_team_emails = read_subcontract_team_emails()
+                            if not subcontract_team_emails:
+                                st.warning("No Subcontract Team emails configured. Add them in Admin tab to send approval notifications.")
+                            else:
+                                try:
+                                    # We need the rows and the combined PDF for the email.
+                                    # Let's build them if they don't exist yet.
+                                    if 'rows' not in locals():
+                                        rows = read_requirements_by_refs(refs_to_act)
+                                    if 'pdf_bytes' not in locals() and rows:
+                                        pdf_bytes = build_requirement_pdf_from_rows(rows, st.session_state.company_meta)
+
+                                    if rows and pdf_bytes:
+                                        first_row = rows[0]
+                                        approver_name = st.session_state.get("user",{}).get("name") or "Admin"
+                                        subject = f"[SJCPL] Approved for Subcontract: {first_row.get('project_code','')} - {len(rows)} item(s)"
+                                        body_rows_html = "".join(
+                                            f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                                            f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                                            f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                                            for r in rows
+                                        )
+                                        html_body = f"""
+                                        <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
+                                            <p>The following request(s) have been <b>Approved</b> by {approver_name} and require action from the Subcontract team:</p>
+                                            <table style="border-collapse:collapse;font-size:13px">
+                                            <thead><tr style="background:#f0f0f0"><th style="padding:4px 8px;text-align:left">Ref</th><th style="padding:4px 8px;text-align:left">Item</th><th style="padding:4px 8px;text-align:left">Qty</th></tr></thead>
+                                            <tbody>{body_rows_html}</tbody>
+                                            </table>
+                                            <p>Attached: approved request PDF for your records.</p>
+                                        </div>
+                                        """
+                                        attach_name = f"Approved_Subcontract_{first_row.get('project_code','')}.pdf"
+                                        ok_mail, msg_mail = send_email_via_smtp(",".join(subcontract_team_emails), subject, html_body, pdf_bytes, attach_name)
+                                        if ok_mail:
+                                            st.success(f"Notified Subcontract Team: {', '.join(subcontract_team_emails)}")
+                                        else:
+                                            st.error(f"Subcontract Team notification failed: {msg_mail}")
+                                except Exception as e:
+                                    st.error(f"An error occurred while notifying the Subcontract Team: {e}")
+
                         new_status = "Approved" if do_approve else "Rejected"
                         try: # 1) Update DB
                             update_requirement_status(refs_to_act, new_status, st.session_state.user.get("email",""), status_detail=note or "") # Update status in DB
@@ -3645,6 +3693,40 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.error(f"Delete failed: {e}")
                         else:
                             st.write("")
+
+                with st.expander("?? Subcontract Team Notifications", expanded=False):
+                    st.caption("Emails added here will be notified when an admin approves a request for further action.")
+                    try:
+                        subcontract_emails = read_subcontract_team_emails()
+                        if subcontract_emails:
+                            st.write("Current recipients:", ", ".join(subcontract_emails))
+                        else:
+                            st.info("No recipients configured yet.")
+                    except Exception as e:
+                        st.error(f"Could not read subcontract team emails: {e}")
+                        subcontract_emails = []
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        with st.form("add-subcontract-email-form"):
+                            new_email = st.text_input("Add new email")
+                            if st.form_submit_button("Add Email"):
+                                if new_email and "@" in new_email:
+                                    try:
+                                        add_subcontract_team_email(new_email, by_email=st.session_state.user.get("email"))
+                                        st.success(f"Added {new_email}.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Failed to add email: {e}")
+                                else:
+                                    st.error("Please enter a valid email address.")
+                    with c2:
+                        if subcontract_emails:
+                            email_to_delete = st.selectbox("Select email to remove", [""] + subcontract_emails)
+                            if email_to_delete and st.button("Remove Email"):
+                                delete_subcontract_team_email(email_to_delete)
+                                st.success(f"Removed {email_to_delete}.")
+                                st.rerun()
 
                 with st.expander("? Add / Update User", expanded=False):
                     a1, a2 = st.columns(2)
