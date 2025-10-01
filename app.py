@@ -3607,8 +3607,6 @@ for i, tab_label in enumerate(visible_tabs):
                                         by_email=st.session_state.get("user", {}).get("email"),
                                     )
                                     st.session_state.site_groups_df = read_site_groups()
-                                    st.session_state["_site_group_last"] = group_name.strip()
-                                    st.session_state["site-group-select"] = group_name.strip()
                                     st.success("Site group saved.")
                                     st.rerun()
                                 except Exception as e:
