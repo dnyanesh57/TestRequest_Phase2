@@ -4,7 +4,7 @@
 from __future__ import annotations
 import io, os, uuid, hmac, hashlib, json, base64, requests, secrets
 import datetime as dt
-from typing import Dict, List, Sequence, Tuple, Optional
+from typing import Dict, List, Sequence, Tuple, Optional, DefaultDict
 from db_adapter import (
     read_acl_df, write_acl_df,
     read_reqlog_df, write_reqlog_df,
@@ -42,6 +42,7 @@ from reportlab.lib import colors
 from reportlab.lib.enums import TA_RIGHT
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
+from collections import defaultdict
 
 # SMTP (for email drafts)
 import smtplib, ssl
