@@ -181,25 +181,40 @@ def build_vendor_email_html(row: dict) -> str:
     vendor = row.get("vendor","")
     desc = row.get("description","")
     uom = row.get("uom","")
-    qty = f"{row.get('qty',''):.2f}" if isinstance(row.get('qty'), (int, float)) else str(row.get('qty',''))
+    qty_val = row.get('qty','')
+    qty = f"{qty_val:.2f}" if isinstance(qty_val, (int, float)) else str(qty_val)
     stage = row.get("stage","")
     dt_gen = row.get("generated_at","")
+    lot = row.get("lot_number","")
+    make = row.get("make","")
+    mat_qty = row.get("material_quantity","")
+    manufacturer = row.get("manufacturer","")
+    extra_rows = []
+    if lot:
+        extra_rows.append(f"        <tr><td style=\"padding:4px 8px\"><b>Lot Number</b></td><td style=\"padding:4px 8px\">{lot}</td></tr>")
+    if make:
+        extra_rows.append(f"        <tr><td style=\"padding:4px 8px\"><b>Make</b></td><td style=\"padding:4px 8px\">{make}</td></tr>")
+    if mat_qty:
+        extra_rows.append(f"        <tr><td style=\"padding:4px 8px\"><b>Material Quantity</b></td><td style=\"padding:4px 8px\">{mat_qty}</td></tr>")
+    if manufacturer:
+        extra_rows.append(f"        <tr><td style=\"padding:4px 8px\"><b>Manufacturer</b></td><td style=\"padding:4px 8px\">{manufacturer}</td></tr>")
+    extras_html = "".join(extra_rows)
     return f"""
     <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
       <p>Dear Vendor <b>{vendor}</b>,</p>
       <p>Please find attached the requirement reference <b>{ref}</b> for project <b>{proj}</b>.</p>
       <table style="border-collapse:collapse;font-size:13px;width:100%">
-        <tr><td style="padding:4px 8px"><b>Type</b></td><td style="padding:4px 8px">{req_type}</td></tr>
-        <tr><td style="padding:4px 8px"><b>Item</b></td><td style="padding:4px 8px">{desc}</td></tr>
-        <tr><td style="padding:4px 8px"><b>Qty</b></td><td style="padding:4px 8px">{qty} {uom}</td></tr>
-        <tr><td style="padding:4px 8px"><b>Stage</b></td><td style="padding:4px 8px">{stage or '-'}</td></tr>
-        <tr><td style="padding:4px 8px"><b>Generated</b></td><td style="padding:4px 8px">{dt_gen}</td></tr>
+        <tr><td style=\"padding:4px 8px\"><b>Type</b></td><td style=\"padding:4px 8px\">{req_type}</td></tr>
+        <tr><td style=\"padding:4px 8px\"><b>Item</b></td><td style=\"padding:4px 8px\">{desc}</td></tr>
+        <tr><td style=\"padding:4px 8px\"><b>Qty</b></td><td style=\"padding:4px 8px\">{qty} {uom}</td></tr>
+        <tr><td style=\"padding:4px 8px\"><b>Stage</b></td><td style=\"padding:4px 8px\">{stage or '-'} </td></tr>
+        <tr><td style=\"padding:4px 8px\"><b>Generated</b></td><td style=\"padding:4px 8px\">{dt_gen}</td></tr>
+{extras_html}
       </table>
       <p>Please review the attached PDF for full details.</p>
       <p>Regards,<br/>SJCPL - Test Request and Approval</p>
     </div>
     """
-
 def send_email_via_smtp(to_email: str, subject: str, html_body: str,
                         attachment_bytes: bytes | None, attachment_name: str | None) -> tuple[bool, str]:
     """
@@ -1427,7 +1442,8 @@ ENGINE_VERSION = "v2.9.0"
 REQUIRED_REG_COLS = [
     "ref","hash","project_code","project_name","request_type","vendor","wo",
     "line_key","uom","stage","description","qty","date_casting","date_testing",
-    "remarks","remaining_at_request","approval_required","approval_reason",
+    "remarks","lot_number","make","material_quantity","manufacturer",
+    "remaining_at_request","approval_required","approval_reason",
     "is_new_item","generated_at","generated_by_name","generated_by_email",
     "status","approver","approved_at",
     # Engine extras
@@ -1689,6 +1705,22 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         desc = _esc(_to_text(p.get("description")))
         stage = _esc(_to_text(p.get("stage"), dash="N/A"))
         item_desc_text = f"{desc} <br/> (Stage: {stage})"
+        extras = []
+        lot = _to_text(p.get("lot_number"))
+        make_val = _to_text(p.get("make"))
+        mat_qty = _to_text(p.get("material_quantity"))
+        manufacturer = _to_text(p.get("manufacturer"))
+        if lot and lot != '—':
+            extras.append(f"Lot Number: {lot}")
+        if make_val and make_val != '—':
+            extras.append(f"Make: {make_val}")
+        if mat_qty and mat_qty != '—':
+            extras.append(f"Material Quantity: {mat_qty}")
+        if manufacturer and manufacturer != '—':
+            extras.append(f"Manufacturer: {manufacturer}")
+        if extras:
+            extras_html = '<br/>'.join(_esc(x) for x in extras)
+            item_desc_text += '<br/>' + extras_html
 
         qty_val = _coerce_float(p.get("qty", ""))
         qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "â€”" # Replace all occurrences of "â€”" with "-"
@@ -1775,6 +1807,10 @@ def generate_pdf_and_log_lines(
             "description": entry["description"].strip(), "qty": float(qty),
             "date_casting": entry.get("date_casting",""), "date_testing": entry.get("date_testing",""),
             "remarks": entry.get("remarks",""),
+            "lot_number": entry.get("lot_number",""),
+            "make": entry.get("make",""),
+            "material_quantity": entry.get("material_quantity",""),
+            "manufacturer": entry.get("manufacturer",""),
             "remaining_at_request": entry.get("remaining_at_request",""),
             "approval_required": entry.get("approval_required", False),
             "approval_reason": entry.get("approval_reason",""),
@@ -2050,7 +2086,8 @@ def _send_vendor_emails_for_refs(refs: list[str]):
                 st.warning(f"No vendor email configured for: {vendor_key}. (Admin > Vendor Contacts)")
                 continue
 
-            subject = f"[SJCPL] Approved - {bucket[0].get('project_code', '')} - {len(bucket)} item(s)"
+            site_name = bucket[0].get('project_name') or bucket[0].get('project_code', '')
+            subject = f"Test Request ({site_name}) - {bucket[0].get('ref', '')}"
             try:
                 sections = [build_vendor_email_html(r) for r in bucket]
                 html_body = "<hr style='margin:16px 0;border:none;border-top:1px solid #e0e0e0;'/>".join(sections)
@@ -2095,6 +2132,20 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
         d = pd.to_datetime(r.get("generated_at","")).strftime("%d-%m-%Y")
     except Exception:
         d = str(r.get("generated_at",""))
+    lot = (r.get('lot_number') or '').strip()
+    make = (r.get('make') or '').strip()
+    mat_qty = (r.get('material_quantity') or '').strip()
+    manufacturer = (r.get('manufacturer') or '').strip()
+    extra_bits = []
+    if lot:
+        extra_bits.append(f'Lot Number: {lot}')
+    if make:
+        extra_bits.append(f'Make: {make}')
+    if mat_qty:
+        extra_bits.append(f'Material Quantity: {mat_qty}')
+    if manufacturer:
+        extra_bits.append(f'Manufacturer: {manufacturer}')
+    extras_html = ('<br/>' + '<br/>'.join(extra_bits)) if extra_bits else ''
     html = f"""
 <div style="font-family:Arial,Helvetica,sans-serif;color:#222;max-width:1000px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:1px solid #ddd;padding-bottom:6px;margin-bottom:6px">
@@ -2132,7 +2183,7 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
       <tr>
         <td style="padding:6px;border:1px solid #ccc">1</td>
         <td style="padding:6px;border:1px solid #ccc">{d}</td>
-        <td style="padding:6px;border:1px solid #ccc">{(r.get('description') or '')} (UOM: {(r.get('uom') or '')}; Stage: {(r.get('stage') or '')})</td>
+        <td style="padding:6px;border:1px solid #ccc">{(r.get('description') or '')} (UOM: {(r.get('uom') or '')}; Stage: {(r.get('stage') or '')}){extras_html}</td>
         <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td> # Replace all occurrences of "â€”" with "-"
         <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or 'â€”'}</td>
         <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or 'â€”'}</td>
@@ -2872,6 +2923,8 @@ for i, tab_label in enumerate(visible_tabs):
                         if st.session_state.get("rq_last_selected_line") != line_key:
                             st.session_state["rq-desc"] = source_desc
                             st.session_state["rq_last_selected_line"] = line_key
+                            for _opt in ("rq-lot", "rq-make", "rq-material-qty", "rq-manufacturer"):
+                                st.session_state[_opt] = ""
                         description = st.text_area(
                             "Description (free text allowed)",
                             value=st.session_state.get("rq-desc", source_desc),
@@ -2896,6 +2949,10 @@ for i, tab_label in enumerate(visible_tabs):
                         approval_required = True
                         approval_reason = "new_item"
 
+                    lot_number = st.text_input("Lot Number (optional)", key="rq-lot")
+                    make = st.text_input("Make (optional)", key="rq-make")
+                    material_quantity = st.text_input("Material Quantity (optional)", key="rq-material-qty")
+                    manufacturer = st.text_input("Manufacturer (optional)", key="rq-manufacturer")
                     date_cast  = st.date_input("Date of Casting (optional)", value=None, key="rq-cast", format="DD/MM/YYYY")
                     date_test  = st.date_input("Date of Testing (optional)", value=None, key="rq-test", format="DD/MM/YYYY")
                     remarks    = st.text_area("Remarks (optional)", "", height=90, key="rq-remarks")
@@ -2917,6 +2974,14 @@ for i, tab_label in enumerate(visible_tabs):
                                 for item in st.session_state.req_cart:
                                     if item['line_key'] == line_key:
                                         item['qty'] += float(qty)
+                                        if lot_number.strip():
+                                            item['lot_number'] = lot_number.strip()
+                                        if make.strip():
+                                            item['make'] = make.strip()
+                                        if material_quantity.strip():
+                                            item['material_quantity'] = material_quantity.strip()
+                                        if manufacturer.strip():
+                                            item['manufacturer'] = manufacturer.strip()
                                         found_in_cart = True
                                         st.success("Updated quantity for existing item in cart.")
                                         break
@@ -2928,14 +2993,18 @@ for i, tab_label in enumerate(visible_tabs):
                                     "request_type": request_type,
                                     "vendor": vendor, "wo": wo, "line_key": line_key,
                                     "uom": uom, "stage": stage, "description": description.strip(),
-                                    "qty": float(qty), "date_casting": str(date_cast) if date_cast else "",
+                                    "qty": float(qty),
                                     "date_casting": str(date_cast) if date_cast else "",
                                     "date_testing": str(date_test) if date_test else "",
                                     "remarks": remarks.strip(),
+                                    "lot_number": lot_number.strip(),
+                                    "make": make.strip(),
+                                    "material_quantity": material_quantity.strip(),
+                                    "manufacturer": manufacturer.strip(),
                                     "remaining_at_request": float(remaining) if not np.isnan(remaining) else "",
                                     "is_new_item": is_new_item,
                                     "approval_required": approval_required,
-                                    "approval_reason": approval_reason
+                                    "approval_reason": approval_reason,
                                 })
                                 st.success("Added to request cart.")
                             st.rerun()
@@ -3046,12 +3115,30 @@ for i, tab_label in enumerate(visible_tabs):
                                         st.warning("No approval recipients configured for this scope. Add them in Admin > Approval Recipients.")
                                     else:
                                         # Build HTML summary for all pending lines
+                                        def _admin_desc(r):
+                                            desc = str(r.get('description', ''))
+                                            extras = []
+                                            lot = (r.get('lot_number') or '').strip()
+                                            make = (r.get('make') or '').strip()
+                                            mat_qty = (r.get('material_quantity') or '').strip()
+                                            manufacturer = (r.get('manufacturer') or '').strip()
+                                            if lot:
+                                                extras.append(f'Lot Number: {lot}')
+                                            if make:
+                                                extras.append(f'Make: {make}')
+                                            if mat_qty:
+                                                extras.append(f'Material Quantity: {mat_qty}')
+                                            if manufacturer:
+                                                extras.append(f'Manufacturer: {manufacturer}')
+                                            if extras:
+                                                return desc + '<br/>' + '<br/>'.join(extras)
+                                            return desc
                                         rows_html = "".join(
                                             f"<tr><td style='padding:6px 8px'>{r.get('ref','')}</td>"
                                             f"<td style='padding:6px 8px'>{r.get('project_code','')}</td>"
                                             f"<td style='padding:6px 8px'>{r.get('vendor','')}</td>"
                                             f"<td style='padding:6px 8px'>{r.get('request_type','')}</td>"
-                                            f"<td style='padding:6px 8px'>{r.get('description','')}</td>"
+                                            f"<td style='padding:6px 8px'>{_admin_desc(r)}</td>"
                                             f"<td style='padding:6px 8px'>{r.get('qty','')} {r.get('uom','')}</td>"
                                             f"<td style='padding:6px 8px'>{r.get('status_detail','')}</td></tr>"
                                             for r in needing_approval
@@ -3210,7 +3297,8 @@ for i, tab_label in enumerate(visible_tabs):
                                         st.warning(f"No vendor email configured for: {vendor_key}. (Admin â†’ Vendor Contacts)")
                                         continue # Skip if no email found
  
-                                    subject = f"[SJCPL] Approved â€” {bucket[0].get('project_code','')} â€” {len(bucket)} item(s)"
+                                    site_name = bucket[0].get('project_name') or bucket[0].get('project_code', '')
+                                    subject = f"Test Request ({site_name}) - {bucket[0].get('ref', '')}"
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -3533,3 +3621,4 @@ for i, tab_label in enumerate(visible_tabs):
 
 
 st.caption("&copy; SJCPL - Test Request and Approvals &mdash; V1")
+

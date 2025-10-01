@@ -437,6 +437,10 @@ def _ensure_requirements_log_table():
                   date_casting TEXT,
                   date_testing TEXT,
                   remarks TEXT,
+                  lot_number TEXT,
+                  make TEXT,
+                  material_quantity TEXT,
+                  manufacturer TEXT,
                   remaining_at_request REAL,
                   approval_required BOOLEAN,
                   approval_reason TEXT,
@@ -464,19 +468,61 @@ def _ensure_requirements_log_table():
                 CREATE TABLE IF NOT EXISTS requirements_log (
                   id BIGSERIAL PRIMARY KEY,
                   ref TEXT NOT NULL UNIQUE,
-                  hash TEXT, project_code TEXT, project_name TEXT, request_type TEXT, vendor TEXT, wo TEXT,
-                  line_key TEXT, uom TEXT, stage TEXT, description TEXT, qty REAL,
-                  date_casting TEXT, date_testing TEXT, remarks TEXT, remaining_at_request REAL,
-                  approval_required BOOLEAN, approval_reason TEXT, is_new_item BOOLEAN,
-                  generated_at TIMESTAMPTZ, generated_by_name TEXT, generated_by_email TEXT,
-                  status TEXT, approver TEXT, approved_at TIMESTAMPTZ,
-                  idem_key TEXT, status_detail TEXT, auto_approved_at TIMESTAMPTZ, auto_approved_by TEXT,
-                  engine_version TEXT, snap_company_name TEXT, snap_address_1 TEXT, snap_address_2 TEXT
+                  hash TEXT,
+                  project_code TEXT,
+                  project_name TEXT,
+                  request_type TEXT,
+                  vendor TEXT,
+                  wo TEXT,
+                  line_key TEXT,
+                  uom TEXT,
+                  stage TEXT,
+                  description TEXT,
+                  qty REAL,
+                  date_casting TEXT,
+                  date_testing TEXT,
+                  remarks TEXT,
+                  lot_number TEXT,
+                  make TEXT,
+                  material_quantity TEXT,
+                  manufacturer TEXT,
+                  remaining_at_request REAL,
+                  approval_required BOOLEAN,
+                  approval_reason TEXT,
+                  is_new_item BOOLEAN,
+                  generated_at TIMESTAMPTZ,
+                  generated_by_name TEXT,
+                  generated_by_email TEXT,
+                  status TEXT,
+                  approver TEXT,
+                  approved_at TIMESTAMPTZ,
+                  idem_key TEXT,
+                  status_detail TEXT,
+                  auto_approved_at TIMESTAMPTZ,
+                  auto_approved_by TEXT,
+                  engine_version TEXT,
+                  snap_company_name TEXT,
+                  snap_address_1 TEXT,
+                  snap_address_2 TEXT
                 )
             """))
 
 
-
+        extras = [
+            ('lot_number', 'TEXT'),
+            ('make', 'TEXT'),
+            ('material_quantity', 'TEXT'),
+            ('manufacturer', 'TEXT')
+        ]
+        if DB_URL.startswith('sqlite'):
+            for col, ddl in extras:
+                try:
+                    c.execute(text(f"ALTER TABLE requirements_log ADD COLUMN {col} {ddl}"))
+                except Exception:
+                    pass
+        else:
+            for col, ddl in extras:
+                c.execute(text(f"ALTER TABLE requirements_log ADD COLUMN IF NOT EXISTS {col} {ddl}"))
 
 def read_acl_df() -> pd.DataFrame:
     return df_read("select * from acl_users")
