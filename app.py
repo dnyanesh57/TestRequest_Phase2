@@ -245,7 +245,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
             return False, "Gmail requires from_email == user. Set both to the same Gmail address."
     msg = _build_mime_message(cfg, to_email, subject, html_body, attachment_bytes, attachment_name)
 
-    context = ssl.create_default_context(server_hostname=cfg["host"])
+    context = ssl.create_default_context()
     last_err = None
 
     def _try_starttls():
@@ -257,7 +257,7 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
             server.sendmail(cfg["from_email"], [to_email], msg.as_string())
 
     def _try_ssl_465():
-        with smtplib.SMTP_SSL(cfg["host"], 465, timeout=cfg["timeout"], context=context) as server:
+        with smtplib.SMTP_SSL(cfg["host"], 465, timeout=cfg["timeout"], context=context, server_hostname=cfg["host"]) as server:
             server.ehlo()
             server.login(cfg["user"], cfg["password"])
             server.sendmail(cfg["from_email"], [to_email], msg.as_string())
