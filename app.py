@@ -3194,31 +3194,13 @@ for i, tab_label in enumerate(visible_tabs):
                                     pc = first_row.get("project_code")
                                     vk = first_row.get("vendor")
                                     rt = first_row.get("request_type")
-
-                                    # NEW: Add emails from site groups
-                                    site_group_emails = set()
-                                    site_groups_df = _site_groups_df()
-                                    if not site_groups_df.empty and pc:
-                                        for _, group_row in site_groups_df.iterrows():
-                                            sites_in_group = _split_token_string(group_row.get("sites", ""))
-                                            if pc in sites_in_group:
-                                                group_emails = _split_token_string(group_row.get("emails", ""))
-                                                for email in group_emails:
-                                                    site_group_emails.add(email)
-
-
                                     requester_name = first_row.get("generated_by_name", "Requester")
 
                                     approver_emails = list_approver_emails(pc, vk, rt)
                                     if not approver_emails:
                                         st.warning("No approval recipients configured for this scope. Add them in Admin > Approval Recipients.")
                                     else:
-                                        # Build HTML summary for all pending lines
-                                        # Combine explicit approvers with site group members
-                                        all_recipients = set(approver_emails)
-                                        for email in site_group_emails:
-                                            all_recipients.add(email)
-                                        final_recipients = sorted(list(all_recipients))
+                                        final_recipients = sorted(list(set(approver_emails)))
 
                                         def _admin_desc(r):
                                             desc = str(r.get('description', ''))
@@ -3441,21 +3423,54 @@ for i, tab_label in enumerate(visible_tabs):
                                 st.error("Some vendor emails failed: " + "; ".join(sent_err)) # Report all errors
  
                         # 5) Optionally email requesters (group by generated_by_email)
-                        if do_approve and send_requester_after_approve and rows and pdf_bytes:
-                            from collections import defaultdict
-                            by_requester = defaultdict(list)
+                        # AND NOW: email site groups on approval/rejection
+                        if (do_approve or do_reject) and send_requester_after_approve and rows and pdf_bytes:
+                            by_requester: dict[str, list[dict]] = defaultdict(list)
+                            site_group_recipients: set[str] = set()
+
                             for r in rows:
                                 remail = (r.get("generated_by_email") or "").strip()
                                 if remail: # Group by requester email
                                     by_requester[remail].append(r)
- 
+
+                                # Find site group emails for each project code in the approved/rejected batch
+                                project_codes_in_batch = {str(r.get("project_code", "")).strip() for r in rows}
+                                site_groups_df = _site_groups_df()
+                                if not site_groups_df.empty:
+                                    for _, group_row in site_groups_df.iterrows():
+                                        sites_in_group = _split_token_string(group_row.get("sites", ""))
+                                        # Check if any of this group's sites are in our batch
+                                        if any(pc in sites_in_group for pc in project_codes_in_batch):
+                                            group_emails = _split_token_string(group_row.get("emails", ""))
+                                            for email in group_emails:
+                                                site_group_recipients.add(email)
+
+                            # Combine requesters and site group members into one recipient list per bucket
+                            # This is slightly complex because a batch can span multiple projects/requesters
+                            # For simplicity, we'll send one email to each unique recipient (requester or site group member)
+                            # with a summary of all items they are involved with.
+
+                            # Bucket by final recipient email
+                            final_recipient_buckets: dict[str, list[dict]] = defaultdict(list)
+                            # Add requester's items
+                            for email, items in by_requester.items():
+                                final_recipient_buckets[email].extend(items)
+                            # Add all items to site group members' buckets
+                            for email in site_group_recipients:
+                                # If they were also a requester, their items are already there.
+                                # If not, add all items from the batch.
+                                if email not in final_recipient_buckets:
+                                    final_recipient_buckets[email].extend(rows)
+
+
                             if not by_requester:
                                 st.warning("No requester email found on the selected refs.")
                             else:
                                 approver_name = st.session_state.get("user",{}).get("name") or st.session_state.get("user",{}).get("email") or "Approver"
                                 sent_ok_r, sent_err_r = 0, []
-                                for remail, bucket in by_requester.items():
-                                    subject = f"[SJCPL] Your request was Approved — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
+                                for recipient_email, bucket in final_recipient_buckets.items():
+                                    status_text = "Approved" if do_approve else "Rejected"
+                                    subject = f"[SJCPL] Request {status_text} — {bucket[0].get('project_code','')} — {len(bucket)} item(s)"
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -3464,7 +3479,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     )
                                     html_body = f"""
                                     <div style="font-family:Arial,Helvetica,sans-serif;color:#222">
-                                      <p><b>Your request has been approved</b> by {approver_name}.</p>
+                                      <p><b>The following request(s) have been {status_text}</b> by {approver_name}.</p>
                                       <table style="border-collapse:collapse;font-size:13px">
                                         <thead><tr style="background:#f0f0f0">
                                           <th style="padding:4px 8px;text-align:left">Ref</th>
@@ -3476,11 +3491,11 @@ for i, tab_label in enumerate(visible_tabs):
                                       <p>Attached: approved request PDF.</p>
                                     </div>
                                     """
-                                    attach_name = f"Approved_{bucket[0].get('project_code','')}.pdf"
-                                    ok_mail, msg_mail = send_email_via_smtp(remail, subject, html_body, pdf_bytes, attach_name)
+                                    attach_name = f"{status_text}_{bucket[0].get('project_code','')}.pdf"
+                                    ok_mail, msg_mail = send_email_via_smtp(recipient_email, subject, html_body, pdf_bytes, attach_name)
  
                                     try:
-                                        log_requirement_email(bucket[0].get("ref",""), bucket[0].get("vendor",""), remail, subject, ok_mail, (None if ok_mail else msg_mail)) # Log for requester
+                                        log_requirement_email(bucket[0].get("ref",""), bucket[0].get("vendor",""), recipient_email, subject, ok_mail, (None if ok_mail else msg_mail)) # Log for requester
                                     except Exception: # Best-effort logging
                                         pass
  
@@ -3488,9 +3503,9 @@ for i, tab_label in enumerate(visible_tabs):
                                     else: sent_err_r.append(f"{remail}: {msg_mail}")
  
                                 if sent_ok_r:
-                                    st.success(f"Emailed requester(s) for {sent_ok_r} group(s).")
+                                    st.success(f"Emailed {sent_ok_r} unique recipient(s) (requesters/site groups).")
                                 if sent_err_r:
-                                    st.error("Some requester emails failed: " + "; ".join(sent_err_r))
+                                    st.error("Some recipient emails failed: " + "; ".join(sent_err_r))
                         # 6) Finally, refresh the grid
                         st.rerun()
 
