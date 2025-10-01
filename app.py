@@ -956,7 +956,7 @@ def _user_can(flag: str) -> bool:
         return True
     return bool(st.session_state.user.get(flag, False))
 
-def _split_site_string(value) -> list[str]:
+def _split_token_string(value) -> list[str]:
     if isinstance(value, (list, tuple, set)):
         tokens: list[str] = []
         for item in value:
@@ -994,7 +994,7 @@ def _site_group_map() -> dict[str, list[str]]:
         name = str(row.get("group_name") or "").strip()
         if not name:
             continue
-        mapping[name] = _split_site_string(row.get("sites", ""))
+        mapping[name] = _split_token_string(row.get("sites", ""))
     return mapping
 
 def _expand_site_tokens(tokens: Sequence[str]) -> list[str]:
@@ -1029,7 +1029,7 @@ def _user_allowed_sites() -> list[str]:
     raw = st.session_state.user.get("sites", "")
     if not raw or str(raw).strip() == "*":
         return ["*"]
-    tokens = _split_site_string(raw)
+    tokens = _split_token_string(raw)
     if not tokens:
         return ["*"]
     expanded = _expand_site_tokens(tokens)
@@ -3194,6 +3194,19 @@ for i, tab_label in enumerate(visible_tabs):
                                     pc = first_row.get("project_code")
                                     vk = first_row.get("vendor")
                                     rt = first_row.get("request_type")
+
+                                    # NEW: Add emails from site groups
+                                    site_group_emails = set()
+                                    site_groups_df = _site_groups_df()
+                                    if not site_groups_df.empty and pc:
+                                        for _, group_row in site_groups_df.iterrows():
+                                            sites_in_group = _split_token_string(group_row.get("sites", ""))
+                                            if pc in sites_in_group:
+                                                group_emails = _split_token_string(group_row.get("emails", ""))
+                                                for email in group_emails:
+                                                    site_group_emails.add(email)
+
+
                                     requester_name = first_row.get("generated_by_name", "Requester")
 
                                     approver_emails = list_approver_emails(pc, vk, rt)
@@ -3201,6 +3214,12 @@ for i, tab_label in enumerate(visible_tabs):
                                         st.warning("No approval recipients configured for this scope. Add them in Admin > Approval Recipients.")
                                     else:
                                         # Build HTML summary for all pending lines
+                                        # Combine explicit approvers with site group members
+                                        all_recipients = set(approver_emails)
+                                        for email in site_group_emails:
+                                            all_recipients.add(email)
+                                        final_recipients = sorted(list(all_recipients))
+
                                         def _admin_desc(r):
                                             desc = str(r.get('description', ''))
                                             extras = []
@@ -3255,19 +3274,19 @@ for i, tab_label in enumerate(visible_tabs):
 
                                         # Reuse the combined PDF you just created
                                         ok_mail, msg_mail = send_email_via_smtp(
-                                            ",".join(approver_emails),  # or loop and send individually if your SMTP doesn't accept multiple recipients
+                                            ",".join(final_recipients),  # or loop and send individually if your SMTP doesn't accept multiple recipients
                                             subject, html_body, pdf_bytes, attach_name
                                         )
 
                                         # Log each recipient (optional, if you added a mail log function)
                                         try:
-                                            for em in approver_emails:
+                                            for em in final_recipients:
                                                 log_requirement_email(first_row.get("ref",""), vk, em, subject, ok_mail, (None if ok_mail else msg_mail))
                                         except Exception:
                                             pass
 
                                         if ok_mail:
-                                            st.success(f"Sent approval email to: {', '.join(approver_emails)}")
+                                            st.success(f"Sent approval email to: {', '.join(final_recipients)}")
                                         else:
                                             st.error(f"Approval email failed: {msg_mail}")
                                 else:
@@ -3499,11 +3518,14 @@ for i, tab_label in enumerate(visible_tabs):
                     sg_df = _site_groups_df()
                     if not sg_df.empty:
                         display_df = sg_df.copy()
-                        display_df["Site count"] = display_df["sites"].apply(lambda s: len(_split_site_string(s)))
-                        display_df["Sites"] = display_df["sites"].apply(lambda s: ", ".join(_split_site_string(s)))
+                        display_df["Sites"] = display_df["sites"].apply(lambda s: f"{len(_split_token_string(s))} sites")
+                        display_df["Emails"] = display_df["emails"].apply(lambda s: f"{len(_split_token_string(s))} emails")
+                        # For a cleaner display, don't show the full list in the table
+                        # display_df["Sites"] = display_df["sites"].apply(lambda s: ", ".join(_split_token_string(s)))
+                        # display_df["Emails"] = display_df["emails"].apply(lambda s: ", ".join(_split_token_string(s)))
                         st.dataframe(
-                            display_df[["group_name", "Site count", "Sites", "updated_at", "updated_by"]].rename(
-                                columns={"group_name": "Group", "updated_at": "Updated", "updated_by": "Updated by"}
+                            display_df[["group_name", "Sites", "Emails", "updated_at", "updated_by"]].rename(
+                                columns={"group_name": "Group", "updated_at": "Updated", "updated_by": "Updated by", "sites": "Sites", "emails": "Emails"}
                             ),
                             use_container_width=True,
                             hide_index=True,
@@ -3514,6 +3536,7 @@ for i, tab_label in enumerate(visible_tabs):
                     st.session_state.setdefault("site-group-name", "")
                     st.session_state.setdefault("site-group-sites", [])
                     st.session_state.setdefault("site-group-extra", "")
+                    st.session_state.setdefault("site-group-emails", "")
                     st.session_state.setdefault("site-group-select", "<New group>")
                     st.session_state.setdefault("_site_group_last", "<New group>")
 
@@ -3525,21 +3548,33 @@ for i, tab_label in enumerate(visible_tabs):
                             st.session_state["site-group-name"] = ""
                             st.session_state["site-group-sites"] = []
                             st.session_state["site-group-extra"] = ""
+                            st.session_state["site-group-emails"] = ""
                         else:
                             base_sites = site_group_map.get(group_choice, [])
                             from_dataset = [s for s in base_sites if s in available_sites]
                             extra_sites = [s for s in base_sites if s not in available_sites]
+                            group_emails = _split_token_string(sg_df[sg_df["group_name"] == group_choice]["emails"].iloc[0])
                             st.session_state["site-group-name"] = group_choice
                             st.session_state["site-group-sites"] = from_dataset
                             st.session_state["site-group-extra"] = "".join(extra_sites)
+                            st.session_state["site-group-emails"] = "\n".join(group_emails)
 
                     group_name = st.text_input("Group name", key="site-group-name")
-                    selected_sites = st.multiselect("Sites (choose from current data)", available_sites, key="site-group-sites")
-                    extra_input = st.text_area(
-                        "Additional site codes (one per line)",
-                        key="site-group-extra",
-                        placeholder="Enter site codes not present in the dataset, one per line",
-                    )
+                    
+                    sg_c1, sg_c2 = st.columns(2)
+                    with sg_c1:
+                        selected_sites = st.multiselect("Sites (choose from current data)", available_sites, key="site-group-sites")
+                        extra_input = st.text_area(
+                            "Additional site codes (one per line)",
+                            key="site-group-extra",
+                            placeholder="Enter site codes not present in the dataset, one per line",
+                        )
+                    with sg_c2:
+                        emails_input = st.text_area(
+                            "Notification Emails (one per line)",
+                            key="site-group-emails",
+                            placeholder="user1@example.com\nuser2@example.com"
+                        )
 
                     extra_tokens = []
                     for raw_line in str(extra_input).replace(",", "").splitlines():
@@ -3548,6 +3583,13 @@ for i, tab_label in enumerate(visible_tabs):
                             extra_tokens.append(token)
 
                     combined_sites = _dedup_preserve(selected_sites + extra_tokens)
+
+                    email_tokens = []
+                    for raw_line in str(emails_input).replace(",", "").splitlines():
+                        token = raw_line.strip()
+                        if token:
+                            email_tokens.append(token)
+                    combined_emails = _dedup_preserve(email_tokens)
 
                     col_save, col_delete = st.columns([3, 1])
                     with col_save:
@@ -3561,6 +3603,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     upsert_site_group(
                                         group_name.strip(),
                                         combined_sites,
+                                        combined_emails,
                                         by_email=st.session_state.get("user", {}).get("email"),
                                     )
                                     st.session_state.site_groups_df = read_site_groups()
@@ -3581,6 +3624,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.session_state["site-group-name"] = ""
                                     st.session_state["site-group-sites"] = []
                                     st.session_state["site-group-extra"] = ""
+                                    st.session_state["site-group-emails"] = ""
                                     st.success("Site group deleted.")
                                     st.rerun()
                                 except Exception as e:
@@ -3822,6 +3866,3 @@ for i, tab_label in enumerate(visible_tabs):
 
 
 st.caption("&copy; SJCPL - Test Request and Approvals &mdash; V1")
-
-
-

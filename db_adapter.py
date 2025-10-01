@@ -375,33 +375,41 @@ def ensure_site_groups_table() -> None:
                   id INTEGER PRIMARY KEY AUTOINCREMENT,
                   group_name TEXT UNIQUE NOT NULL,
                   sites TEXT NOT NULL,
+                  emails TEXT NOT NULL DEFAULT '',
                   created_at TEXT NOT NULL DEFAULT (datetime('now')),
                   created_by TEXT,
                   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
                   updated_by TEXT
                 )
             """))
+            try:
+                # Add emails column if it doesn't exist (for migrations)
+                c.execute(text("ALTER TABLE site_groups ADD COLUMN emails TEXT NOT NULL DEFAULT ''"))
+            except Exception:
+                pass
         else:
             c.execute(text("""
                 CREATE TABLE IF NOT EXISTS site_groups (
                   id BIGSERIAL PRIMARY KEY,
                   group_name TEXT UNIQUE NOT NULL,
                   sites TEXT NOT NULL,
+                  emails TEXT NOT NULL DEFAULT '',
                   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                   created_by TEXT,
                   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                   updated_by TEXT
                 )
             """))
+            c.execute(text("ALTER TABLE site_groups ADD COLUMN IF NOT EXISTS emails TEXT NOT NULL DEFAULT ''"))
 
 def read_site_groups() -> pd.DataFrame:
     ensure_site_groups_table()
-    df = df_read("select id, group_name, sites, created_at, created_by, updated_at, updated_by from site_groups order by lower(group_name)")
+    df = df_read("select id, group_name, sites, emails, created_at, created_by, updated_at, updated_by from site_groups order by lower(group_name)")
     if df.empty:
-        return pd.DataFrame(columns=["id", "group_name", "sites", "created_at", "created_by", "updated_at", "updated_by"])
+        return pd.DataFrame(columns=["id", "group_name", "sites", "emails", "created_at", "created_by", "updated_at", "updated_by"])
     return df
 
-def upsert_site_group(group_name: str, sites: Sequence[str] | None, by_email: str | None = None) -> None:
+def upsert_site_group(group_name: str, sites: Sequence[str] | None, emails: Sequence[str] | None, by_email: str | None = None) -> None:
     name = (group_name or "").strip()
     if not name:
         raise ValueError("group_name required")
@@ -415,25 +423,37 @@ def upsert_site_group(group_name: str, sites: Sequence[str] | None, by_email: st
         raise ValueError("At least one site is required")
     sites_dedup = list(dict.fromkeys(site_tokens))
     sites_str = "|".join(sites_dedup)
+
+    emails = emails or []
+    email_tokens: list[str] = []
+    for e in emails:
+        token = str(e or "").strip()
+        if token:
+            email_tokens.append(token)
+    emails_dedup = list(dict.fromkeys(email_tokens))
+    emails_str = "|".join(emails_dedup)
+
     with _conn() as c:
         if DB_URL.startswith("sqlite"):
             c.execute(text("""
-                INSERT INTO site_groups (group_name, sites, created_by, updated_by)
-                VALUES (:name, :sites, :by, :by)
+                INSERT INTO site_groups (group_name, sites, emails, created_by, updated_by)
+                VALUES (:name, :sites, :emails, :by, :by)
                 ON CONFLICT(group_name) DO UPDATE SET
                   sites = excluded.sites,
+                  emails = excluded.emails,
                   updated_at = datetime('now'),
                   updated_by = excluded.updated_by
-            """), {"name": name, "sites": sites_str, "by": by_email})
+            """), {"name": name, "sites": sites_str, "emails": emails_str, "by": by_email})
         else:
             c.execute(text("""
-                INSERT INTO site_groups (group_name, sites, created_by, updated_by)
-                VALUES (:name, :sites, :by, :by)
+                INSERT INTO site_groups (group_name, sites, emails, created_by, updated_by)
+                VALUES (:name, :sites, :emails, :by, :by)
                 ON CONFLICT (group_name) DO UPDATE SET
                   sites = excluded.sites,
+                  emails = excluded.emails,
                   updated_at = NOW(),
                   updated_by = excluded.updated_by
-            """), {"name": name, "sites": sites_str, "by": by_email})
+            """), {"name": name, "sites": sites_str, "emails": emails_str, "by": by_email})
 
 def delete_site_group(group_name: str) -> None:
     name = (group_name or "").strip()
