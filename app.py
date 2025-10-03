@@ -3125,22 +3125,41 @@ for i, tab_label in enumerate(visible_tabs):
                             df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
                             _appr_line = 0.0
                             if df_req is not None and not df_req.empty:
-                                df_ok = df_req[df_req["status"].isin(["Approved","Auto Approved"])].copy()
+                                df_ok = df_req[df_req["status"].astype(str).isin(["Approved","Auto Approved"])].copy()
                                 if df_ok is not None and not df_ok.empty:
+                                    # Normalize keys to avoid type/space mismatches
                                     def _norm_key(v):
                                         try:
                                             fv = float(str(v).strip())
                                             return str(int(fv)) if fv.is_integer() else str(v).strip()
                                         except Exception:
                                             return str(v).strip()
-                                    pc_sel = str(project_code).strip()
-                                    wo_sel = str(wo).strip()
+                                    def _norm_str(v):
+                                        return str(v).strip().lower()
+
+                                    pc_sel = _norm_str(project_code)
+                                    wo_sel = _norm_str(wo)
                                     lk_sel = _norm_key(line_key)
-                                    pc_col = df_ok["project_code"].astype(str).str.strip()
-                                    wo_col = df_ok["wo"].astype(str).str.strip()
-                                    lk_col = df_ok["line_key"].apply(_norm_key)
+
+                                    pc_col = df_ok.get("project_code", "").astype(str).str.strip().str.lower()
+                                    wo_series = df_ok["wo"] if "wo" in df_ok.columns else (df_ok["WO_Key"] if "WO_Key" in df_ok.columns else df_ok.get("wo", ""))
+                                    wo_col = wo_series.astype(str).str.strip().str.lower()
+                                    lk_series = df_ok["line_key"] if "line_key" in df_ok.columns else (df_ok["Line_Key"] if "Line_Key" in df_ok.columns else df_ok.get("line_key", ""))
+                                    lk_col = lk_series.apply(_norm_key)
+
                                     mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_col == lk_sel)
                                     _appr_line = float(df_ok.loc[mask, "qty"].sum())
+
+                                    # Fallback: try matching on description text if line_key mapping differs
+                                    if _appr_line == 0.0 and ("description" in df_ok.columns):
+                                        try:
+                                            current_desc = str(source_desc).strip().lower()
+                                            desc_col = df_ok["description"].astype(str).str.strip().str.lower()
+                                            mask2 = (pc_col == pc_sel) & (wo_col == wo_sel) & (desc_col == current_desc)
+                                            _appr_line = float(df_ok.loc[mask2, "qty"].sum())
+                                        except Exception:
+                                            pass
+
                             _line_act_rem = max(0.0, float(remaining) - float(_appr_line))
                         except Exception:
                             _line_act_rem = float(remaining)
