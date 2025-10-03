@@ -2591,6 +2591,31 @@ if "*" not in user_sites:
     items_f = items_f[items_f["Project_Key"].isin(user_sites)].copy()
     summary_f = wo_summary(items_f)
 
+# --- Helper: compute approved qty by project and actual remaining by project ---
+def _approved_qty_by_project() -> dict:
+    try:
+        df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+    except Exception:
+        return {}
+    if df_req is None or getattr(df_req, 'empty', True):
+        return {}
+    df_ok = df_req[df_req["status"].isin(["Approved","Auto Approved"])].copy()
+    if df_ok.empty:
+        return {}
+    g = df_ok.groupby("project_code", dropna=False)["qty"].sum().to_dict()
+    # Coerce floats
+    return {str(k): float(v) for k,v in g.items() if k is not None}
+
+def _actual_remaining_by_project(items: pd.DataFrame) -> pd.DataFrame:
+    """Return a small DataFrame per project with Remaining_Qty (sum), Approved_Req_Qty, Actual_Remaining."""
+    if items.empty:
+        return pd.DataFrame(columns=["Project_Key","Remaining_Qty_WO","Approved_Req_Qty","Actual_Remaining"])
+    by_proj = items.groupby("Project_Key", dropna=False)["Remaining_Qty"].sum().reset_index(name="Remaining_Qty_WO")
+    appr = _approved_qty_by_project()
+    by_proj["Approved_Req_Qty"] = by_proj["Project_Key"].map(lambda p: float(appr.get(str(p), 0.0)))
+    by_proj["Actual_Remaining"] = (by_proj["Remaining_Qty_WO"] - by_proj["Approved_Req_Qty"]).astype(float)
+    return by_proj
+
 # ---------------------- Tabs ----------------------
 LINE_COLS_BASE = [
     "Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage",
@@ -3375,6 +3400,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                     # Modify / Cancel (admin-only)
                     with st.expander("Modify quantity / Cancel request (admin only)", expanded=False):
+                        st.subheader("Modify or Cancel Raised Requests")
                         all_refs_rr = df["ref"].astype(str).tolist()
                         left_m, right_m = st.columns([2,2])
                         with left_m:
@@ -3459,17 +3485,18 @@ for i, tab_label in enumerate(visible_tabs):
                                     except Exception as e:
                                         st.error(f"Cancel failed: {e}")
 
-                    st.markdown("### Approval Actions")
-                    # Focus on items needing approval by default
-                    df_admin = df.copy()
-                    # Filter for pending items only
-                    df_admin = df_admin[df_admin["status"].astype(str).str.startswith("Pending")]
- 
-                    refs_to_act = st.multiselect(
-                        "Select reference(s) to act on",
-                        df_admin["ref"].astype(str).tolist(),
-                        key="admin-approve-refs"
-                    )
+                    if _user_can_approve():
+                        st.markdown("### Approval Actions")
+                        # Focus on items needing approval by default
+                        df_admin = df.copy()
+                        # Filter for pending items only
+                        df_admin = df_admin[df_admin["status"].astype(str).str.startswith("Pending")]
+
+                        refs_to_act = st.multiselect(
+                            "Select reference(s) to act on",
+                            df_admin["ref"].astype(str).tolist(),
+                            key="admin-approve-refs"
+                        )
                     note = st.text_area("Note (will be recorded into status_detail)", "", key="admin-approve-note")
 
                     # Toggles: show approval controls only to approver roles
