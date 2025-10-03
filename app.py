@@ -3130,7 +3130,8 @@ for i, tab_label in enumerate(visible_tabs):
                                 _appr_line = 0.0
                             _line_act_rem = max(0.0, float(remaining) - _appr_line)
                         except Exception:
-                            _line_act_rem = None
+                            # Fallback: if we cannot compute approved qty, treat actual remaining as WO remaining
+                            _line_act_rem = float(remaining)
                         _qty_label = (
                             f"Quantity (WO Remaining {remaining:.2f})"
                             if _line_act_rem is None
@@ -3138,7 +3139,7 @@ for i, tab_label in enumerate(visible_tabs):
                         )
                         qty = st.number_input(_qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
                         is_new_item = False
-                        approval_required = qty > (_line_act_rem if (_line_act_rem is not None) else remaining)
+                        approval_required = qty > float(_line_act_rem)
                         approval_reason = "low_qty" if approval_required else ""
                     else: # New item
                         line_key = "NEW"
