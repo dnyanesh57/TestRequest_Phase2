@@ -3908,7 +3908,7 @@ for i, tab_label in enumerate(visible_tabs):
 
                 # Precompute site metadata for admin forms
                 available_sites = sorted(items_df["Project_Key"].dropna().unique().tolist()) if not items_df.empty else []
-                # Notify Site Group (manual) — master admin only
+                # Notify Site Group (manual) - master admin only
                 if _user_is_master_admin():
                     with st.expander("Notify Site Group (manual)", expanded=False):
                         refs_all = st.session_state.reqlog_df["ref"].astype(str).tolist() if isinstance(st.session_state.get("reqlog_df"), pd.DataFrame) else []
@@ -4059,7 +4059,7 @@ for i, tab_label in enumerate(visible_tabs):
                 # Force Reset User Password (master admin only)
                 if _user_is_master_admin():
                     with st.expander("Force Reset User Password", expanded=False):
-                        st.caption("Master admin can reset any user\s password immediately.")
+                        st.caption("Master admin can reset any user's password immediately.")
                         try:
                             users_df = st.session_state.acl_df.copy()
                             emails = sorted(users_df["email"].dropna().astype(str).unique().tolist()) if not users_df.empty else []
