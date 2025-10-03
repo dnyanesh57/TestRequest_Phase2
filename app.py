@@ -3132,8 +3132,9 @@ for i, tab_label in enumerate(visible_tabs):
                         except Exception:
                             _line_act_rem = None
                         _qty_label = (
-                            f"Quantity (Remaining {remaining:.2f})" if _line_act_rem is None
-                            else f"Quantity (Line Actual Remaining {_line_act_rem:.2f})"
+                            f"Quantity (WO Remaining {remaining:.2f})"
+                            if _line_act_rem is None
+                            else f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {_line_act_rem:.2f})"
                         )
                         qty = st.number_input(_qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
                         is_new_item = False
