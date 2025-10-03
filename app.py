@@ -962,8 +962,18 @@ def _user_is_master_admin() -> bool:
 def _user_is_site_admin() -> bool:
     return _role().lower() == "site_admin"
 
+def _user_is_master_admin_approver() -> bool:
+    return _role().lower() == "master_admin_approver"
+
+def _user_can_approve() -> bool:
+    return _user_is_master_admin() or _user_is_master_admin_approver()
+
+def _is_global_viewer() -> bool:
+    # Roles that can see all sites/approval requests
+    return _user_is_master_admin() or _user_is_master_admin_approver()
+
 def _user_can(flag: str) -> bool:
-    if _user_is_master_admin() or _user_is_site_admin():
+    if _user_is_master_admin() or _user_is_site_admin() or _user_is_master_admin_approver():
         return True
     return bool(st.session_state.user.get(flag, False))
 
@@ -3012,7 +3022,7 @@ for i, tab_label in enumerate(visible_tabs):
                     proj_opts = sorted(items_f["Project_Key"].dropna().unique().tolist())
                     
                     _sites = _user_allowed_sites()
-                    if "*" not in _sites and not _user_is_master_admin():
+                    if "*" not in _sites and not _is_global_viewer():
                         proj_opts = [p for p in proj_opts if p in _sites]
 
                     project_code = st.selectbox("Project (Code)", proj_opts, key="rq-proj")
@@ -3337,7 +3347,7 @@ for i, tab_label in enumerate(visible_tabs):
                 df = st.session_state.reqlog_df.copy()
 
                 _sites = _user_allowed_sites()
-                if "*" not in _sites and not _user_is_master_admin():
+                if "*" not in _sites and not _is_global_viewer():
                     df = df[df["project_code"].isin(_sites)].copy()
 
                 c1, c2, c3, c4 = st.columns(4)
@@ -3462,15 +3472,22 @@ for i, tab_label in enumerate(visible_tabs):
                     )
                     note = st.text_area("Note (will be recorded into status_detail)", "", key="admin-approve-note")
 
-                    # Toggles: vendor OFF by default, requester ON by default
-                    colA, colB, colC, colD = st.columns([1,1,1,2])
-                    with colA:
-                        do_approve = st.button("? Approve", type="primary", key="admin-approve-btn")
-                    with colB:
-                        do_reject = st.button("? Reject", key="admin-reject-btn") # Removed vendor email checkbox from here
-                        send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
-                    with colD:
-                        send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
+                    # Toggles: show approval controls only to approver roles
+                    if _user_can_approve():
+                        colA, colB, colC, colD = st.columns([1,1,1,2])
+                        with colA:
+                            do_approve = st.button("? Approve", type="primary", key="admin-approve-btn")
+                        with colB:
+                            do_reject = st.button("? Reject", key="admin-reject-btn")
+                            send_vendor_after_approve = st.checkbox("Email vendor with PDF", value=True, key="admin-send-vendor")
+                        with colD:
+                            send_requester_after_approve = st.checkbox("Email requester with PDF", value=True, key="admin-send-requester")
+                    else:
+                        st.info("Approval is restricted to master_admin and master_admin_approver. You can modify/cancel above.")
+                        do_approve = False
+                        do_reject = False
+                        send_vendor_after_approve = False
+                        send_requester_after_approve = False
  
                     if (do_approve or do_reject) and not refs_to_act:
                         st.warning("Pick at least one reference.")
