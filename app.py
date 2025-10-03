@@ -3594,43 +3594,6 @@ for i, tab_label in enumerate(visible_tabs):
                                     except Exception as e:
                                         st.error(f"Cancel failed: {e}")
 
-                    # Manual Site-Group notification (processed by Subcontract team)
-                    with st.expander("Notify Site Group (manual)", expanded=False):
-                        refs_sg = st.multiselect("Select ref(s)", df["ref"].astype(str).tolist(), key="reg-sg-refs")
-                        sg_df = _site_groups_df()
-                        group_names = sorted(sg_df["group_name"].dropna().astype(str).unique().tolist()) if not sg_df.empty else []
-                        pick_groups = st.multiselect("Site Group(s)", group_names, key="reg-sg-pick")
-                        msg = st.text_area("Message", "Your request has been processed by the Subcontracts team. You may raise it now.", key="reg-sg-msg")
-                        if st.button("Send notification to selected group(s)", key="reg-sg-send"):
-                            if not refs_sg or not pick_groups:
-                                st.warning("Select at least one reference and one site group.")
-                            else:
-                                sg_map = {str(r.get("group_name")): str(r.get("emails","")) for _, r in sg_df.iterrows()} if not sg_df.empty else {}
-                                recipients = set()
-                                for g in pick_groups:
-                                    emails = sg_map.get(g, "")
-                                    for e in str(emails).split("|"):
-                                        e = e.strip()
-                                        if e:
-                                            recipients.add(e)
-                                if not recipients:
-                                    st.warning("No emails found for the selected group(s).")
-                                else:
-                                    subject = f"[SJCPL] Request processed - {len(refs_sg)} ref(s)"
-                                    body = f"<div style='font-family:Arial,Helvetica,sans-serif;color:#222'>{msg}<br/>Refs: {', '.join(refs_sg)}</div>"
-                                    ok, err = 0, []
-                                    for em in recipients:
-                                        ok_mail, msg_mail = send_email_via_smtp(em, subject, body, None, None)
-                                        if ok_mail:
-                                            ok += 1
-                                        else:
-                                            err.append(f"{em}: {msg_mail}")
-                                    if ok:
-                                        st.success(f"Sent to {ok} recipient(s).")
-                                    if err:
-                                        st.error("Some failed: " + "; ".join(err))
-
-                    # Check in Work Order and prepare raise
                     with st.expander("Check in Work Order and prepare raise", expanded=False):
                         ref_check = st.selectbox("Select ref", [""] + df["ref"].astype(str).tolist(), key="reg-wo-check-ref")
                         qty_to_raise = st.number_input("Qty to prepare", min_value=0.0, value=0.0, step=1.0, key="reg-wo-check-qty")
@@ -3945,6 +3908,38 @@ for i, tab_label in enumerate(visible_tabs):
 
                 # Precompute site metadata for admin forms
                 available_sites = sorted(items_df["Project_Key"].dropna().unique().tolist()) if not items_df.empty else []
+                # Notify Site Group (manual) — master admin only
+                if _user_is_master_admin():
+                    with st.expander("Notify Site Group (manual)", expanded=False):
+                        refs_all = st.session_state.reqlog_df["ref"].astype(str).tolist() if isinstance(st.session_state.get("reqlog_df"), pd.DataFrame) else []
+                        refs_sg = st.multiselect("Select ref(s)", refs_all, key="admin-sg-refs")
+                        sg_df = _site_groups_df()
+                        group_names = sorted(sg_df["group_name"].dropna().astype(str).unique().tolist()) if not sg_df.empty else []
+                        pick_groups = st.multiselect("Site Group(s)", group_names, key="admin-sg-groups")
+                        msg = st.text_area("Message", "Your request has been processed by the Subcontracts team. You may raise it now.", key="admin-sg-msg")
+                        if st.button("Send group notification", key="admin-sg-send"): 
+                            if not refs_sg or not pick_groups:
+                                st.warning("Select at least one reference and one site group.")
+                            else:
+                                sg_map = {str(r.get("group_name")): str(r.get("emails","")) for _, r in sg_df.iterrows()} if not sg_df.empty else {}
+                                recipients = set()
+                                for g in pick_groups:
+                                    for e in str(sg_map.get(g, "")).split("|"):
+                                        e = e.strip()
+                                        if e: recipients.add(e)
+                                if not recipients:
+                                    st.warning("No emails found for selected group(s).")
+                                else:
+                                    subject = f"[SJCPL] Request processed - {len(refs_sg)} ref(s)"
+                                    refs_joined = ", ".join(refs_sg)
+                                    body = f"<div style=\"font-family:Arial,Helvetica,sans-serif;color:#222\">{msg}<br/>Refs: {refs_joined}</div>"
+                                    sent_ok, sent_err = 0, []
+                                    for em in recipients:
+                                        ok_mail, msg_mail = send_email_via_smtp(em, subject, body, None, None)
+                                        if ok_mail: sent_ok += 1
+                                        else: sent_err.append(f"{em}: {msg_mail}")
+                                    if sent_ok: st.success(f"Sent to {sent_ok} recipient(s).")
+                                    if sent_err: st.error("Some failed: " + "; ".join(sent_err))
                 site_group_map = _site_group_map()
                 site_group_names = sorted(site_group_map.keys())
                 site_choices = ["*"] + available_sites
