@@ -1,6 +1,6 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # wo_phase2_dashboard_sjcpl.py
-# SJCPL � Work Order Dashboard (Phase 1 + Phase 2) � Integrated Engine
+# SJCPL ? Work Order Dashboard (Phase 1 + Phase 2) ? Integrated Engine
 # Final, Complete, and Functional Version
 from __future__ import annotations
 import io, os, uuid, hmac, hashlib, json, base64, requests, secrets
@@ -243,10 +243,10 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
     if not ok:
         return False, "SMTP is not configured. Add [smtp] to .streamlit/secrets.toml (host, port, user, password, from_email)."
 
-    # Gmail sanity check (common source of �connection closed� during auth)
+    # Gmail sanity check (common source of ?connection closed? during auth)
     if "gmail.com" in (cfg["host"] or "").lower():
         # App Password (not account password) is required if 2FA is on, and FROM must match USER.
-        if cfg["from_email"].lower() != cfg["user"].lower(): # Replace all occurrences of "�" with "'"
+        if cfg["from_email"].lower() != cfg["user"].lower(): # Replace all occurrences of "?" with "'"
             return False, "Gmail requires from_email == user. Set both to the same Gmail address."
     msg = _build_mime_message(cfg, to_email, subject, html_body, attachment_bytes, attachment_name)
 
@@ -283,8 +283,8 @@ def send_email_via_smtp(to_email: str, subject: str, html_body: str,
         except Exception as e2:
             # Compose helpful message
             hint = []
-            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower(): # Replace all occurrences of "�" with "'"
-                hint.append("Network timeout�your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
+            if "timed out" in str(last_err).lower() or "timed out" in str(e2).lower(): # Replace all occurrences of "?" with "'"
+                hint.append("Network timeout?your host may block outbound SMTP. Try SSL:465 or an email API (SendGrid/Mailgun/SES).")
             if "gmail" in (cfg["host"] or "").lower():
                 hint.append("For Gmail: use an App Password, and set from_email == user.")
             return False, f"{type(e2).__name__}: {e2}. Prior: {type(last_err).__name__}: {last_err}. " + (" ".join(hint) if hint else "")
@@ -303,7 +303,7 @@ if "app_settings" not in st.session_state:
 # Show logged-in user at the top-right of the app
 u = st.session_state.get("user", {})
 st.markdown(f"<div style='text-align:right;color:#555;font-size:12px'>"\
-            f"Signed in as: <b>{u.get('name','Guest')}</b> "# Replace all occurrences of "�" with "-"
+            f"Signed in as: <b>{u.get('name','Guest')}</b> "# Replace all occurrences of "?" with "-"
             f"({u.get('role','guest')}) &lt;{u.get('email','guest@sjcpl.local')}&gt;</div>",
             unsafe_allow_html=True)
 
@@ -326,8 +326,8 @@ GITHUB_API_URL = "https://api.github.com/repos/dnyanesh57/TestRequest_Phase2/con
 COMPANY_DEFAULT = {
     "name": "SJ Contracts Pvt Ltd",
     "address_lines": [
-        "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park", # Replace all occurrences of "�" with "-"
-        "Baner Road, Opp. Sadanand Hotel, Baner, Pune � 411045"
+        "SJ Contracts Pvt Ltd, 305 - 308 Amar Business Park", # Replace all occurrences of "?" with "-"
+        "Baner Road, Opp. Sadanand Hotel, Baner, Pune ? 411045"
     ]
 }
 _NUMERIC_COLS = {"Initial_Qty","Remeasure_Add","Revised_Qty","Used_Qty","Remaining_Qty"}
@@ -446,7 +446,7 @@ def _ensure_acl_in_state():
     if "acl_df" in st.session_state:
         return
 
-    df = pd.DataFrame() # Replace all occurrences of "�" with "-"
+    df = pd.DataFrame() # Replace all occurrences of "?" with "-"
 
     # 1) Try DB first
     try:
@@ -810,7 +810,7 @@ def pdf_grouped_lines(
     )
     story = []; styles = _styles()
 
-    story.append(Paragraph(f"SJCPL � Work Order Report {title_suffix}".strip(), styles["BrandTitle"]))
+    story.append(Paragraph(f"SJCPL ? Work Order Report {title_suffix}".strip(), styles["BrandTitle"]))
     story.append(Paragraph(
         "Tables are wrapped to fit the page width. If columns exceed the page, the table is split into parts, "
         "repeating Line # and Description. Low cells are shown in red.", styles["Small"]))
@@ -819,7 +819,7 @@ def pdf_grouped_lines(
     def add_proj_block(dfp: pd.DataFrame, proj_name: str):
         story.append(Paragraph(f"Project: {proj_name}", styles["BrandH2"]))
         for wo, dwo in dfp.groupby("WO_Key", dropna=False):
-            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "�" with "-"
+            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "?" with "-"
             rmc  = float(pd.to_numeric(dwo.get("Remeasure_Add"), errors="coerce").sum())
             rev  = float(pd.to_numeric(dwo.get("Revised_Qty"), errors="coerce").sum())
             used = float(pd.to_numeric(dwo.get("Used_Qty"), errors="coerce").sum())
@@ -827,8 +827,8 @@ def pdf_grouped_lines(
             lines = int(dwo.get("Line_Key").nunique()) if "Line_Key" in dwo.columns else len(dwo)
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             story.append(Paragraph(
-                f"WO: {wo}  �  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
-                f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}", # Replace all occurrences of "�" with "-"
+                f"WO: {wo}  ?  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  "
+                f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}", # Replace all occurrences of "?" with "-"
                 styles["Small"]
             ))
             tbl_cols = [c for c in line_cols if c in dwo.columns]
@@ -839,7 +839,7 @@ def pdf_grouped_lines(
     def add_sub_block(dfs: pd.DataFrame, sub_name: str):
         story.append(Paragraph(f"Subcontractor: {sub_name}", styles["BrandH2"]))
         for wo, dwo in dfs.groupby("WO_Key", dropna=False):
-            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "�" with "-"
+            init = float(pd.to_numeric(dwo.get("Initial_Qty"), errors="coerce").sum()) # Replace all occurrences of "?" with "-"
             rmc  = float(pd.to_numeric(dwo.get("Remeasure_Add"), errors="coerce").sum())
             rev  = float(pd.to_numeric(dwo.get("Revised_Qty"), errors="coerce").sum())
             used = float(pd.to_numeric(dwo.get("Used_Qty"), errors="coerce").sum())
@@ -848,7 +848,7 @@ def pdf_grouped_lines(
             low   = int(dwo.get("Low_Flag", pd.Series(dtype=bool)).sum()) if "Low_Flag" in dwo.columns else 0
             proj = str(dwo["Project_Key"].iloc[0]) if "Project_Key" in dwo.columns and len(dwo)>0 else ""
             story.append(Paragraph(
-                f"WO: {wo}  �  Project: {proj}  �  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  " # Replace all occurrences of "�" with "-"
+                f"WO: {wo}  ?  Project: {proj}  ?  Lines: {lines}  |  Initial: {init:.2f}  +Remeas: {rmc:.2f}  " # Replace all occurrences of "?" with "-"
                 f"Revised: {rev:.2f}  Used: {used:.2f}  Rem: {rem:.2f}  |  Low<{threshold:g}: {low}",
                 styles["Small"]
             ))
@@ -1101,7 +1101,7 @@ def coerce_number(s: pd.Series) -> pd.Series:
     # to string
     s = s.astype(str)
 
-    # normalize whitespace & NBSP # Replace all occurrences of "�" with "-"
+    # normalize whitespace & NBSP # Replace all occurrences of "?" with "-"
     s = s.str.replace("\u00a0", " ", regex=False).str.strip()
     s = s.str.replace(r"\s+", " ", regex=True)
 
@@ -1243,7 +1243,7 @@ def gh_list_folder(repo: str, folder: str, branch: str) -> list[dict]:
     """
     url = f"https://api.github.com/repos/{repo}/contents/{folder}"
     try:
-        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20) # Replace all occurrences of "�" with "-"
+        r = requests.get(url, headers=_gh_headers(), params={"ref": branch}, timeout=20) # Replace all occurrences of "?" with "-"
         if r.status_code != 200:
             # Bubble up readable diagnostics in UI
             try:
@@ -1337,9 +1337,9 @@ def try_load_latest_from_github(repo: str, folder: str, branch: str) -> tuple[pd
 
 # ---------------------- Load ----------------------
 # 1) Stop hitting GitHub on every rerun
-# Only fetch from GitHub when the admin presses a button; otherwise reuse what�s already loaded.
+# Only fetch from GitHub when the admin presses a button; otherwise reuse what?s already loaded.
 # after login/bootstrap:
-if "_raw_df_cache" not in st.session_state: # Replace all occurrences of "�" with "'"
+if "_raw_df_cache" not in st.session_state: # Replace all occurrences of "?" with "'"
     st.session_state._raw_df_cache = None
     st.session_state._raw_df_meta  = ""
 
@@ -1674,7 +1674,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         # minimal HTML escaping for reportlab paragraphs
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def _to_text(v, dash="�") -> str:
+    def _to_text(v, dash="?") -> str:
         if _is_nanlike(v):
             return dash
         try:
@@ -1712,7 +1712,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         header_table.setStyle(TableStyle([
             ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ('LINEBELOW', (0,0), (-1,-1), 1, colors.HexColor(BRAND_GREY)),
-            ('BOTTOMPADDING', (0,0), (-1,-1), 6), # Replace all occurrences of "�" with "-"
+            ('BOTTOMPADDING', (0,0), (-1,-1), 6), # Replace all occurrences of "?" with "-"
         ]))
         story.append(header_table)
         story.append(Spacer(1, 4*mm))
@@ -1746,15 +1746,15 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         _dt_raw = _to_text(p.get("generated_at"))
         try:
             _dt_fmt = pd.to_datetime(_dt_raw)
-            gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14 # Replace all occurrences of "�" with "-"
+            gen_at_fmt = _dt_fmt.strftime("%d %b %Y, %H:%M:%S")  # e.g., 25 Sep 2025, 12:53:14 # Replace all occurrences of "?" with "-"
         except Exception:
-            gen_at_fmt = _dt_raw if _dt_raw != "�" else "�"
+            gen_at_fmt = _dt_raw if _dt_raw != "?" else "?"
 
         dt_by_html = (
             f"<b>Date &amp; Time:</b> {_esc(gen_at_fmt)}"
             f"&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"
             f"<b>Generated by:</b> {_esc(gen_by)}"
-        ) # Replace all occurrences of "�" with "-"
+        ) # Replace all occurrences of "?" with "-"
         story.append(Paragraph(dt_by_html, styles["Small"]))
         story.append(Spacer(1, 3*mm))
 
@@ -1771,7 +1771,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         pvt_tbl = Table(
             [
                 [
-                Paragraph("<b>Project:</b>", styles["Small"]), # Replace all occurrences of "�" with "-"
+                Paragraph("<b>Project:</b>", styles["Small"]), # Replace all occurrences of "?" with "-"
                 Paragraph(f"{_esc(proj_name)} ({_esc(proj_code)})", styles["Small"]),
                 Paragraph("<b>Vendor:</b>", styles["Small"]),
                 Paragraph(_esc(vendor), styles["Small"])
@@ -1802,7 +1802,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
         try:
             d = pd.to_datetime(p.get("generated_at")).strftime("%d-%m-%Y")
         except Exception:
-            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "�" else "�" # Replace all occurrences of "�" with "-"
+            d = _to_text(p.get("generated_at")).split(" ")[0] if _to_text(p.get("generated_at")) != "?" else "?" # Replace all occurrences of "?" with "-"
 
         # Escape description and stage
         desc = _esc(_to_text(p.get("description")))
@@ -1826,7 +1826,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             item_desc_text += '<br/>' + extras_html
 
         qty_val = _coerce_float(p.get("qty", ""))
-        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "�" # Replace all occurrences of "�" with "-"
+        qty_str = f"{qty_val:.2f}" if not np.isnan(qty_val) else "?" # Replace all occurrences of "?" with "-"
 
         row_data = [
             "1",
@@ -1834,7 +1834,7 @@ def build_requirement_pdf_from_rows(rows: List[Dict], company_meta: Dict) -> byt
             Paragraph(item_desc_text, styles["Cell"]),
             qty_str,
             _esc(_to_text(p.get("uom"))),
-            _esc(_to_text(p.get("date_casting"))), # Replace all occurrences of "�" with "-"
+            _esc(_to_text(p.get("date_casting"))), # Replace all occurrences of "?" with "-"
             _esc(_to_text(p.get("date_testing"))),
             Paragraph(_esc(_to_text(p.get("remarks"))), styles["Cell"])
         ]
@@ -2313,10 +2313,10 @@ def requirement_row_to_html(r: dict, company_meta: Dict) -> str:
         <td style="padding:6px;border:1px solid #ccc">1</td>
         <td style="padding:6px;border:1px solid #ccc">{d}</td>
         <td style="padding:6px;border:1px solid #ccc">{(r.get('description') or '')} (UOM: {(r.get('uom') or '')}; Stage: {(r.get('stage') or '')}){extras_html}</td>
-        <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td> # Replace all occurrences of "�" with "-"
-        <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or '�'}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or '�'}</td>
-        <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or '�'}</td>
+        <td style="padding:6px;border:1px solid #ccc;text-align:right">{r.get('qty','')}</td> # Replace all occurrences of "?" with "-"
+        <td style="padding:6px;border:1px solid #ccc">{r.get('date_casting') or '?'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('date_testing') or '?'}</td>
+        <td style="padding:6px;border:1px solid #ccc">{r.get('remarks') or '?'}</td>
       </tr>
     </tbody>
   </table>
@@ -2371,8 +2371,8 @@ if "app_settings" not in st.session_state:
     st.session_state.app_settings = read_app_settings()
 _ensure_reqlog_in_state()
 _login_block()
-# Replace all occurrences of "�" with "-"
-# Sidebar � Upload + Display + Branding
+# Replace all occurrences of "?" with "-"
+# Sidebar ? Upload + Display + Branding
 with st.sidebar:
     st.header("Data Source")
 
@@ -2392,8 +2392,8 @@ with st.sidebar:
 
     else:
         # Non-admins are locked to GitHub
-        st.write("Using: **GitHub**") # Replace all occurrences of "�" with "-"
-        st.caption(f"{S['github_repo']} � {S['github_branch']} � /{S['github_folder']}")
+        st.write("Using: **GitHub**") # Replace all occurrences of "?" with "-"
+        st.caption(f"{S['github_repo']} ? {S['github_branch']} ? /{S['github_folder']}")
         S["data_source"] = "github"
 
     st.markdown("---")
@@ -2642,7 +2642,7 @@ def render_grouped_lines(
         return
 
     for g1_val, df_g1 in df.groupby(g1, dropna=False):
-        with st.expander(f"{g1.replace('_',' ')}: {g1_val if pd.notna(g1_val) else '�'}", expanded=False):
+        with st.expander(f"{g1.replace('_',' ')}: {g1_val if pd.notna(g1_val) else '?'}", expanded=False):
             for g2_val, df_g2 in df_g1.groupby(g2, dropna=False):
                 header = _header_text(g1_val, g2_val, df_g2)
                 st.markdown(f"**{header}**")
@@ -2673,10 +2673,10 @@ for i, tab_label in enumerate(visible_tabs):
                     st.info("No project data to display.")
 
 
-                st.subheader("Grouped Lines � Project ? Work Order")
+                st.subheader("Grouped Lines ? Project ? Work Order")
                 q = st.text_input("Search (WO / Desc / Stage)", "", key="ov-q").strip().lower()
                 cols_default = ["Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage","Revised_Qty","Used_Qty","Remaining_Qty"]
-                cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols") # Replace all occurrences of "�" with "-"
+                cols_pick = st.multiselect("Columns to show", present_cols(items_f, LINE_COLS_BASE), default=present_cols(items_f, cols_default), key="ov-cols") # Replace all occurrences of "?" with "-"
 
                 view = items_f.copy()
                 if q:
@@ -2699,7 +2699,7 @@ for i, tab_label in enumerate(visible_tabs):
             # 3) Debounce text inputs (they cause a rerun on each keystroke)
             # Wrap search fields into forms so they rerun only on submit.
             if can_view("Group: WO ? Project"):
-                st.subheader("Grouped Lines � Project ? Work Order")
+                st.subheader("Grouped Lines ? Project ? Work Order")
                 with st.form("group-wo-project-search"):
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="gp-q")
                     submitted = st.form_submit_button("Apply")
@@ -2722,7 +2722,7 @@ for i, tab_label in enumerate(visible_tabs):
                 ) # usage: paginated_df(view[inner_cols], key="gp")
         elif tab_label == "Work Order Explorer":
             if can_view("Work Order Explorer"):
-                st.subheader("Explorer � Grouped Lines (Project ? Work Order)")
+                st.subheader("Explorer ? Grouped Lines (Project ? Work Order)")
                 with st.form("work-order-explorer-search"):
                     q = st.text_input("Search (WO / Title / Desc / UOM / Stage)", "", key="ex-q")
                     submitted = st.form_submit_button("Apply")
@@ -2795,7 +2795,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.write(f"**Project:** {r.get('Project_Key','')}")
                                     st.write(f"**Vendor:** {r.get('Subcontractor_Key','')}")
                                     st.write(f"**WO:** {r.get('WO_Key','')}  |  **Line:** {r.get('Line_Key','')}")
-                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}") # Replace all occurrences of "�" with "-"
+                                    st.write(f"**UOM:** {r.get('OD_UOM','')}  |  **Stage:** {r.get('OD_Stage','')}") # Replace all occurrences of "?" with "-"
                                     st.write(f"**Desc:** {r.get('OD_Description','')}")
                                     if r.get("Remaining_Qty", np.nan) < low_threshold:
                                         st.markdown(f'<span class="lowpill">LOW &lt; {low_threshold:g}</span>', unsafe_allow_html=True)
@@ -2830,7 +2830,7 @@ for i, tab_label in enumerate(visible_tabs):
                                   title="S Quantities by Vendor")
                     fig2.update_layout(xaxis_title="", yaxis_title="Quantity", legend_title_text=""); st.plotly_chart(fig2, use_container_width=True, key="sub-bar")
 
-                    st.subheader("Grouped Lines � Vendor ? Work Order") # type: ignore
+                    st.subheader("Grouped Lines ? Vendor ? Work Order") # type: ignore
                 with st.form("subcontractor-summary-search"):
 
                     q = st.text_input("Search (WO / Desc / Stage)", "", key="sub-q").strip().lower()
@@ -2851,8 +2851,8 @@ for i, tab_label in enumerate(visible_tabs):
 
                     render_grouped_lines(
                         view.sort_values(["Subcontractor_Key","WO_Key","Line_Key"]),
-                        ("Subcontractor_Key","WO_Key"), cols_pick, # Replace all occurrences of "�" with "-"
-                        title_fmt="WO: {g2} � Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
+                        ("Subcontractor_Key","WO_Key"), cols_pick, # Replace all occurrences of "?" with "-"
+                        title_fmt="WO: {g2} ? Lines: {lines} | Revised: {rev}  Used: {used}  Rem: {rem}  |  Low<{thr}: {low}",
                         key_prefix="sub", suppress_outer=False, thr_text=f"{low_threshold:g}"
                     )
                 submitted = st.form_submit_button("Apply")
@@ -2867,7 +2867,7 @@ for i, tab_label in enumerate(visible_tabs):
                 st.dataframe(prev.head(200), use_container_width=True, hide_index=True)
         elif tab_label == "Status as on Date":
             if can_view("Status as on Date"):
-                st.subheader("Status as on Date � Grouped Lines (Project ? Work Order)")
+                st.subheader("Status as on Date ? Grouped Lines (Project ? Work Order)")
                 as_on_date = st.date_input("Select date", pd.Timestamp.today().date(), key="as-on-date")
                 as_on_ts = pd.Timestamp(as_on_date)
                 view = items_f[(items_f["OI_Date"].notna()) & (items_f["OI_Date"] <= as_on_ts)].copy() if "OI_Date" in items_f.columns else items_f.copy()
@@ -2906,7 +2906,7 @@ for i, tab_label in enumerate(visible_tabs):
                 if not submitted:
                     q = st.session_state.get("as-q", "")
                 st.download_button(
-                    "Download CSV � Status as on Date (line-wise)",
+                    "Download CSV ? Status as on Date (line-wise)",
                     data=view[[c for c in cols_pick if c in view.columns]].to_csv(index=False).encode("utf-8"),
                     file_name=f"wo_status_as_on_{as_on_ts.date()}.csv", mime="text/csv", key="dl-as-on"
                 )
@@ -2914,7 +2914,7 @@ for i, tab_label in enumerate(visible_tabs):
             if not _user_can("can_export"):
                 st.warning("You do not have permission to access Export.")
             elif can_view("Export"):
-                st.subheader("Export � CSV & PDF (grouped)")
+                st.subheader("Export ? CSV & PDF (grouped)")
                 exp_date_toggle = st.checkbox("Apply 'as on date' filter to exports", value=False, key="exp-date-tgl")
                 if exp_date_toggle:
                     exp_as_on = st.date_input("As on date for export", pd.Timestamp.today().date(), key="exp-as-on")
@@ -2961,27 +2961,27 @@ for i, tab_label in enumerate(visible_tabs):
                 pdf_cols_pick = st.multiselect("Columns in PDF line tables", pdf_cols_options, default=pdf_cols_default, key="pdf-cols")
 
                 if pdf_mode == "All Projects":
-                    pdf_bytes = pdf_grouped_lines(base_items, mode="all_projects", selected=None, line_cols=pdf_cols_pick, title_suffix="� All Projects", alert_col=low_metric, threshold=low_threshold)
-                    st.download_button("Download PDF � All Projects", data=pdf_bytes, file_name="SJCPL_WO_AllProjects.pdf", mime="application/pdf", key="pdf-all")
+                    pdf_bytes = pdf_grouped_lines(base_items, mode="all_projects", selected=None, line_cols=pdf_cols_pick, title_suffix="? All Projects", alert_col=low_metric, threshold=low_threshold)
+                    st.download_button("Download PDF ? All Projects", data=pdf_bytes, file_name="SJCPL_WO_AllProjects.pdf", mime="application/pdf", key="pdf-all")
                 elif pdf_mode == "By Project":
                     selp = st.multiselect("Select Project(s)", sorted(base_items["Project_Key"].dropna().unique()), default=sorted(base_items["Project_Key"].dropna().unique()), key="pdf-proj-sel")
                     if selp:
-                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_project", selected=selp, line_cols=pdf_cols_pick, title_suffix="� Project-wise", alert_col=low_metric, threshold=low_threshold)
-                        st.download_button("Download PDF � Project-wise", data=pdf_bytes, file_name="SJCPL_WO_ProjectWise.pdf", mime="application/pdf", key="pdf-proj")
+                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_project", selected=selp, line_cols=pdf_cols_pick, title_suffix="? Project-wise", alert_col=low_metric, threshold=low_threshold)
+                        st.download_button("Download PDF ? Project-wise", data=pdf_bytes, file_name="SJCPL_WO_ProjectWise.pdf", mime="application/pdf", key="pdf-proj")
                     else:
                         st.info("Select at least one project.")
                 else:
                     sels = st.multiselect("Select Subcontractor(s)", sorted(base_items["Subcontractor_Key"].dropna().unique()), default=sorted(base_items["Subcontractor_Key"].dropna().unique()), key="pdf-sub-sel")
                     if sels:
-                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_sub", selected=sels, line_cols=pdf_cols_pick, title_suffix="� Subcontractor-wise", alert_col=low_metric, threshold=low_threshold)
-                        st.download_button("Download PDF � Subcontractor-wise", data=pdf_bytes, file_name="SJCPL_WO_SubcontractorWise.pdf", mime="application/pdf", key="pdf-sub")
+                        pdf_bytes = pdf_grouped_lines(base_items, mode="by_sub", selected=sels, line_cols=pdf_cols_pick, title_suffix="? Subcontractor-wise", alert_col=low_metric, threshold=low_threshold)
+                        st.download_button("Download PDF ? Subcontractor-wise", data=pdf_bytes, file_name="SJCPL_WO_SubcontractorWise.pdf", mime="application/pdf", key="pdf-sub")
                     else:
                         st.info("Select at least one subcontractor.")
         elif tab_label == "Email Drafts":
             if not _user_can("can_email_drafts"):
                 st.warning("You do not have permission to access Email Drafts.")
             elif can_view("Email Drafts"):
-                st.subheader("Email Drafts � Project-wise & Vendor-wise (tables + HTML/PDF/CSV)")
+                st.subheader("Email Drafts ? Project-wise & Vendor-wise (tables + HTML/PDF/CSV)")
                 draft_date = st.date_input("Date for subject/body", pd.Timestamp.today().date(), key="draft-date")
                 only_low = st.checkbox("Show only Low items in drafts", value=False, key="draft-only-low")
                 ason_toggle = st.checkbox("Use 'Status as on Date' filter for drafts", value=False, key="draft-as-on")
@@ -3002,7 +3002,7 @@ for i, tab_label in enumerate(visible_tabs):
                 missing = [c for c in expected_post_rename if not best_col(renamed_preview, c)]
                 st.write(f"Rows in file: {len(raw_df):,}")
                 st.write(f"Rows considered as 'items': {len(items_df):,}  (filter used: {getattr(items_df, '_lt_filter_note', 'n/a')})")
-                st.write(f"Detected key columns: {present if present else '�'}")
+                st.write(f"Detected key columns: {present if present else '?'}")
                 if missing: st.warning(f"Missing/alias columns not found (fallbacks used or set to NaN): {missing}")
                 st.dataframe(renamed_preview.head(30), use_container_width=True, hide_index=True)
         elif tab_label == "Raise Requirement":
@@ -3144,7 +3144,7 @@ for i, tab_label in enumerate(visible_tabs):
                             
                     if st.session_state.req_cart: # If cart is not empty
                         st.markdown("---")
-                        st.markdown("### Current Request � Line Items")
+                        st.markdown("### Current Request ? Line Items")
                         cart_df = pd.DataFrame(st.session_state.req_cart)
                         st.dataframe(cart_df, use_container_width=True, hide_index=True)
 
@@ -3183,7 +3183,7 @@ for i, tab_label in enumerate(visible_tabs):
                             # Persist rows one-by-one using UPSERT on ref
                             if used_rows:
                                 try:
-                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE �
+                                    upsert_requirements(used_rows)   # row-by-row, ON CONFLICT (ref) DO UPDATE ?
                                     # refresh from DB so the grid shows the authoritative data
                                     st.session_state.reqlog_df = read_reqlog_df()
                                 except Exception as e:
@@ -3197,7 +3197,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     file_name=f"Requirement_{first_entry['project_code']}_{first_entry['request_type']}.pdf",
                                     mime="application/pdf", key="rq-pdf")
                                 if reused_map:
-                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) � existing references were reused.")
+                                    st.info(f"Duplicate suppression active for {len(reused_map)} line(s) ? existing references were reused.")
 
                                 # Decide post-generation emailing behaviour
                                 reused_refs = set(reused_map.values()) if reused_map else set()
@@ -3222,7 +3222,7 @@ for i, tab_label in enumerate(visible_tabs):
                                     elif email_vendor_after and not refs_generated:
                                         st.info("Vendor email skipped because no new references were generated.")
                                     else:
-                                        st.success("This request is already approved. You can email the vendor from �My Requests� (or Requirements Registry).")
+                                        st.success("This request is already approved. You can email the vendor from ?My Requests? (or Requirements Registry).")
                                     if not email_vendor_after:
                                         st.info("Vendor email skipped; use 'My Requests' or 'Requirements Registry' to send it later.")
                                 else:
@@ -3663,7 +3663,7 @@ for i, tab_label in enumerate(visible_tabs):
                                 sent_ok_r, sent_err_r = 0, []
                                 for recipient_email, bucket in final_recipient_buckets.items():
                                     status_text = "Approved" if do_approve else "Rejected"
-                                    subject = f"[SJCPL] Request {status_text} � {bucket[0].get('project_code','')} � {len(bucket)} item(s)"
+                                    subject = f"[SJCPL] Request {status_text} ? {bucket[0].get('project_code','')} ? {len(bucket)} item(s)"
                                     body_rows = "".join(
                                         f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
                                         f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
@@ -3876,7 +3876,7 @@ for i, tab_label in enumerate(visible_tabs):
                     a1, a2 = st.columns(2)
                     email = a1.text_input("Email", key="admin-email")
                     name = a1.text_input("Name", key="admin-name")
-                    role = a1.selectbox("Role", ["master_admin", "site_admin", "user"], key="admin-role")
+                    role = a1.selectbox("Role", ["master_admin", "master_admin_approver", "site_admin", "user"], key="admin-role")
 
                     fast_col1, fast_col2 = st.columns([1, 1])
                     with fast_col1:
@@ -3963,7 +3963,7 @@ for i, tab_label in enumerate(visible_tabs):
                             write_acl_df(dfu)
                             st.success("User saved.")
 
-                # Admin UI: master-admin�only Vendor Contacts manager
+                # Admin UI: master-admin?only Vendor Contacts manager
                 with st.expander("?? Vendor Contacts (DB-only, master admin)"):
                     try:
                         vdf = read_vendor_contacts()
