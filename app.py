@@ -3127,7 +3127,7 @@ for i, tab_label in enumerate(visible_tabs):
                             if df_req is not None and not df_req.empty:
                                 df_ok = df_req[df_req["status"].astype(str).isin(["Approved","Auto Approved"])].copy()
                                 if df_ok is not None and not df_ok.empty:
-                                    # Normalize keys to avoid type/space mismatches
+                                    # Normalize keys to avoid type/space/case mismatches
                                     def _norm_key(v):
                                         try:
                                             fv = float(str(v).strip())
@@ -3146,9 +3146,10 @@ for i, tab_label in enumerate(visible_tabs):
                                     wo_col = wo_series.astype(str).str.strip().str.lower()
                                     lk_series = df_ok["line_key"] if "line_key" in df_ok.columns else (df_ok["Line_Key"] if "Line_Key" in df_ok.columns else df_ok.get("line_key", ""))
                                     lk_col = lk_series.apply(_norm_key)
+                                    qty_col = pd.to_numeric(df_ok.get("qty", 0), errors="coerce").fillna(0.0)
 
                                     mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_col == lk_sel)
-                                    _appr_line = float(df_ok.loc[mask, "qty"].sum())
+                                    _appr_line = float(qty_col[mask].sum())
 
                                     # Fallback: try matching on description text if line_key mapping differs
                                     if _appr_line == 0.0 and ("description" in df_ok.columns):
@@ -3156,12 +3157,13 @@ for i, tab_label in enumerate(visible_tabs):
                                             current_desc = str(source_desc).strip().lower()
                                             desc_col = df_ok["description"].astype(str).str.strip().str.lower()
                                             mask2 = (pc_col == pc_sel) & (wo_col == wo_sel) & (desc_col == current_desc)
-                                            _appr_line = float(df_ok.loc[mask2, "qty"].sum())
+                                            _appr_line = float(qty_col[mask2].sum())
                                         except Exception:
                                             pass
 
                             _line_act_rem = max(0.0, float(remaining) - float(_appr_line))
                         except Exception:
+                            # Fallback to WO remaining if anything fails
                             _line_act_rem = float(remaining)
                         _qty_label = f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {_line_act_rem:.2f})"
                         qty = st.number_input(_qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
