@@ -536,6 +536,21 @@ def log_requirement_audit(ref: str, action: str, old_value: str | None, new_valu
             VALUES (:r, :a, :ov, :nv, :cm, :ac)
         """), {"r": ref, "a": action, "ov": old_value, "nv": new_value, "cm": (comment or ""), "ac": (actor or "")})
 
+def read_requirement_audit(limit: int = 1000) -> pd.DataFrame:
+    """Return recent requirement audit rows (newest first)."""
+    ensure_requirement_audit_table()
+    try:
+        q = f"""
+            SELECT ref, action, old_value, new_value, comment, actor, created_at
+              FROM requirement_audit_log
+             ORDER BY created_at DESC
+             LIMIT {max(1, int(limit))}
+        """
+        return df_read(q)
+    except Exception:
+        # table might be empty or not present; return empty frame with expected columns
+        return pd.DataFrame(columns=["ref","action","old_value","new_value","comment","actor","created_at"])
+
 def _clean_row_for_db(row: dict) -> dict:
     clean = {}
     for k, v in row.items():

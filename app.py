@@ -26,7 +26,7 @@ from db_adapter import (
     
     read_app_settings, write_app_settings,   # NEW
     ensure_site_groups_table, read_site_groups, upsert_site_group, delete_site_group,
-    ensure_requirement_audit_table, log_requirement_audit,
+    ensure_requirement_audit_table, log_requirement_audit, read_requirement_audit,
     # Subcontract team
     ensure_subcontract_team_table, read_subcontract_team_emails, add_subcontract_team_email, delete_subcontract_team_email,
 )
@@ -4059,10 +4059,6 @@ for i, tab_label in enumerate(visible_tabs):
                     if st.button("Run SMTP connectivity check"):
                         smtp_connectivity_check()
                     st.caption("Tip: If both checks fail, your host likely blocks SMTP egress. Use an email API (SendG")
-
-
-
-
                 with st.expander("??? Remove User", expanded=False):
                     emails = sorted(st.session_state.acl_df["email"].tolist())
                     if emails:
@@ -4072,7 +4068,7 @@ for i, tab_label in enumerate(visible_tabs):
                             write_acl_df(st.session_state.acl_df)
                             st.success("User removed.")
 
-                st.download_button("?? Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
+                    st.download_button("?? Download ACL (CSV)", data=st.session_state.acl_df.to_csv(index=False).encode("utf-8"),
                                   file_name="acl_users.csv", mime="text/csv", key="acl-dl")
 
                 st.subheader("Manage Enabled Tabs")
@@ -4086,6 +4082,41 @@ for i, tab_label in enumerate(visible_tabs):
                     _save_enabled_tabs(enabled_sel)
                     st.success("Enabled tabs updated.")
                     st.rerun()
+
+                # Requirement Audit Log (admin-only viewer)
+                with st.expander("?? Requirement Audit (admin)", expanded=False):
+                    st.caption("Structured history of requirement changes (qty updates, cancellations, etc.)")
+                    try:
+                        audit_df = read_requirement_audit(limit=2000)
+                    except Exception as e:
+                        audit_df = pd.DataFrame(columns=["ref","action","old_value","new_value","comment","actor","created_at"])
+                        st.error(f"Failed to load audit: {e}")
+
+                    # Filters
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        f_ref = st.text_input("Filter by Ref contains", "")
+                    with c2:
+                        f_action = st.multiselect("Action", sorted(audit_df["action"].dropna().unique().tolist()) if not audit_df.empty else [], default=[])
+                    with c3:
+                        f_actor = st.text_input("Actor contains", "")
+
+                    view_a = audit_df.copy()
+                    if f_ref.strip():
+                        view_a = view_a[view_a["ref"].astype(str).str.contains(f_ref.strip(), case=False, na=False)]
+                    if f_action:
+                        view_a = view_a[view_a["action"].isin(f_action)]
+                    if f_actor.strip():
+                        view_a = view_a[view_a["actor"].astype(str).str.contains(f_actor.strip(), case=False, na=False)]
+
+                    st.dataframe(view_a, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "?? Download Audit (CSV)",
+                        data=view_a.to_csv(index=False).encode("utf-8"),
+                        file_name="requirement_audit_log.csv",
+                        mime="text/csv",
+                        key="audit-dl",
+                    )
 
 
 st.caption("&copy; SJCPL - Test Request and Approvals &mdash; V1")
