@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # wo_phase2_dashboard_sjcpl.py
 # SJCPL ? Work Order Dashboard (Phase 1 + Phase 2) ? Integrated Engine
 # Final, Complete, and Functional Version
@@ -3123,23 +3123,31 @@ for i, tab_label in enumerate(visible_tabs):
                         # Compute line-level actual remaining: Remaining (this line) - Approved qty from Request Log for this line
                         try:
                             df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+                            _appr_line = 0.0
                             if df_req is not None and not df_req.empty:
                                 df_ok = df_req[df_req["status"].isin(["Approved","Auto Approved"])].copy()
-                                _appr_line = float(df_ok[(df_ok["project_code"].astype(str)==str(project_code)) & (df_ok["wo"].astype(str)==str(wo)) & (df_ok["line_key"].astype(str)==str(line_key))]["qty"].sum()) if not df_ok.empty else 0.0
-                            else:
-                                _appr_line = 0.0
-                            _line_act_rem = max(0.0, float(remaining) - _appr_line)
+                                if df_ok is not None and not df_ok.empty:
+                                    def _norm_key(v):
+                                        try:
+                                            fv = float(str(v).strip())
+                                            return str(int(fv)) if fv.is_integer() else str(v).strip()
+                                        except Exception:
+                                            return str(v).strip()
+                                    pc_sel = str(project_code).strip()
+                                    wo_sel = str(wo).strip()
+                                    lk_sel = _norm_key(line_key)
+                                    pc_col = df_ok["project_code"].astype(str).str.strip()
+                                    wo_col = df_ok["wo"].astype(str).str.strip()
+                                    lk_col = df_ok["line_key"].apply(_norm_key)
+                                    mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_col == lk_sel)
+                                    _appr_line = float(df_ok.loc[mask, "qty"].sum())
+                            _line_act_rem = max(0.0, float(remaining) - float(_appr_line))
                         except Exception:
-                            # Fallback: if we cannot compute approved qty, treat actual remaining as WO remaining
                             _line_act_rem = float(remaining)
-                        _qty_label = (
-                            f"Quantity (WO Remaining {remaining:.2f})"
-                            if _line_act_rem is None
-                            else f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {_line_act_rem:.2f})"
-                        )
+                        _qty_label = f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {_line_act_rem:.2f})"
                         qty = st.number_input(_qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
                         is_new_item = False
-                        approval_required = qty > float(_line_act_rem)
+                        approval_required = qty > (_line_act_rem if (_line_act_rem is not None) else remaining)
                         approval_reason = "low_qty" if approval_required else ""
                     else: # New item
                         line_key = "NEW"
