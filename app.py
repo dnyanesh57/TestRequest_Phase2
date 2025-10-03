@@ -3087,12 +3087,6 @@ for i, tab_label in enumerate(visible_tabs):
                     base_pv = base_proj[base_proj["Subcontractor_Key"] == vendor].copy()
                     wo_opts = sorted(base_pv["WO_Key"].dropna().unique().tolist())
                     wo = st.selectbox("Work Order", wo_opts, key="rq-wo")
-                    # Show Actual Remaining at Work Order level (WO Remaining - Approved for that WO)
-                    try:
-                        _wo_act_rem = max(0.0, float(_actual_remaining_for_wo(items_f, project_code, wo)))
-                        st.info(f"Work Order {wo}: Actual Remaining (WO - Approved): {_wo_act_rem:,.2f}")
-                    except Exception:
-                        _wo_act_rem = None
                     base_pvw = base_pv[base_pv["WO_Key"] == wo].copy()
 
                     item_mode = st.radio("Item Source", ["Existing line item", "New item (needs approval)"], horizontal=True, key="rq-mode")
@@ -3126,18 +3120,24 @@ for i, tab_label in enumerate(visible_tabs):
                             key="rq-desc",
                         )
                         remaining = float(row.get("Remaining_Qty", 0.0))
+                        # Compute line-level actual remaining: Remaining (this line) - Approved qty from Request Log for this line
                         try:
-                            proj_avail2 = _actual_remaining_by_project(items_f)
-                            rowp2 = proj_avail2[proj_avail2["Project_Key"] == project_code]
-                            _act_rem_val = float(rowp2.iloc[0]["Actual_Remaining"]) if not rowp2.empty else None
+                            df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+                            if df_req is not None and not df_req.empty:
+                                df_ok = df_req[df_req["status"].isin(["Approved","Auto Approved"])].copy()
+                                _appr_line = float(df_ok[(df_ok["project_code"].astype(str)==str(project_code)) & (df_ok["wo"].astype(str)==str(wo)) & (df_ok["line_key"].astype(str)==str(line_key))]["qty"].sum()) if not df_ok.empty else 0.0
+                            else:
+                                _appr_line = 0.0
+                            _line_act_rem = max(0.0, float(remaining) - _appr_line)
                         except Exception:
-                            _act_rem_val = None
-                        _qty_label = f"Quantity (WO Remaining {remaining:.2f})" if _act_rem_val is None else f"Quantity (WO Remaining {remaining:.2f} | Project Actual Remaining {_act_rem_val:.2f})"
-                        # Build a richer qty label with WO actual remaining if available
-                        _qty_lbl = f"Quantity (WO Remaining {remaining:.2f})" if (_wo_act_rem is None) else f"Quantity (WO Remaining {remaining:.2f} | WO Actual Remaining {_wo_act_rem:.2f})"
-                        approval_required = (qty > (_wo_act_rem if (_wo_act_rem is not None) else remaining))
+                            _line_act_rem = None
+                        _qty_label = (
+                            f"Quantity (Remaining {remaining:.2f})" if _line_act_rem is None
+                            else f"Quantity (Line Actual Remaining {_line_act_rem:.2f})"
+                        )
+                        qty = st.number_input(_qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
                         is_new_item = False
-                        approval_required = qty > remaining
+                        approval_required = qty > (_line_act_rem if (_line_act_rem is not None) else remaining)
                         approval_reason = "low_qty" if approval_required else ""
                     else: # New item
                         line_key = "NEW"
