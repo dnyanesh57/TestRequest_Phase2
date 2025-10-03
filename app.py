@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # wo_phase2_dashboard_sjcpl.py
 # SJCPL ? Work Order Dashboard (Phase 1 + Phase 2) ? Integrated Engine
 # Final, Complete, and Functional Version
@@ -2616,6 +2616,36 @@ def _actual_remaining_by_project(items: pd.DataFrame) -> pd.DataFrame:
     by_proj["Actual_Remaining"] = (by_proj["Remaining_Qty_WO"] - by_proj["Approved_Req_Qty"]).astype(float)
     return by_proj
 
+# --- Helper: compute approved qty by (project_code, wo) and WO-level actual remaining ---
+def _approved_qty_by_wo() -> dict[tuple[str, str], float]:
+    try:
+        df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+    except Exception:
+        return {}
+    if df_req is None or getattr(df_req, 'empty', True):
+        return {}
+    df_ok = df_req[df_req["status"].isin(["Approved","Auto Approved"])].copy()
+    if df_ok.empty:
+        return {}
+    g = df_ok.groupby(["project_code","wo"], dropna=False)["qty"].sum()
+    out: dict[tuple[str, str], float] = {}
+    for (pc, wo), v in g.items():
+        out[(str(pc), str(wo))] = float(v)
+    return out
+
+def _actual_remaining_for_wo(items: pd.DataFrame, project_code: str, wo: str) -> float:
+    if items is None or items.empty:
+        return 0.0
+    try:
+        # Sum Remaining_Qty for this Project + WO across lines
+        mask = (items.get("Project_Key", "") == project_code) & (items.get("WO_Key", "") == wo)
+        wo_rem = float(items.loc[mask, "Remaining_Qty"].sum())
+    except Exception:
+        wo_rem = 0.0
+    appr_map = _approved_qty_by_wo()
+    appr = float(appr_map.get((str(project_code), str(wo)), 0.0))
+    return wo_rem - appr
+
 # ---------------------- Tabs ----------------------
 LINE_COLS_BASE = [
     "Low_Tag","Subcontractor_Key","Line_Key","OD_Description","OD_UOM","OD_Stage",
@@ -3057,6 +3087,12 @@ for i, tab_label in enumerate(visible_tabs):
                     base_pv = base_proj[base_proj["Subcontractor_Key"] == vendor].copy()
                     wo_opts = sorted(base_pv["WO_Key"].dropna().unique().tolist())
                     wo = st.selectbox("Work Order", wo_opts, key="rq-wo")
+                    # Show Actual Remaining at Work Order level (WO Remaining - Approved for that WO)
+                    try:
+                        _wo_act_rem = max(0.0, float(_actual_remaining_for_wo(items_f, project_code, wo)))
+                        st.info(f"Work Order {wo}: Actual Remaining (WO - Approved): {_wo_act_rem:,.2f}")
+                    except Exception:
+                        _wo_act_rem = None
                     base_pvw = base_pv[base_pv["WO_Key"] == wo].copy()
 
                     item_mode = st.radio("Item Source", ["Existing line item", "New item (needs approval)"], horizontal=True, key="rq-mode")
@@ -3090,7 +3126,16 @@ for i, tab_label in enumerate(visible_tabs):
                             key="rq-desc",
                         )
                         remaining = float(row.get("Remaining_Qty", 0.0))
-                        qty = st.number_input(f"Quantity (Remaining {remaining:.2f})", min_value=0.0, value=0.0, step=1.0, key="rq-qty")
+                        try:
+                            proj_avail2 = _actual_remaining_by_project(items_f)
+                            rowp2 = proj_avail2[proj_avail2["Project_Key"] == project_code]
+                            _act_rem_val = float(rowp2.iloc[0]["Actual_Remaining"]) if not rowp2.empty else None
+                        except Exception:
+                            _act_rem_val = None
+                        _qty_label = f"Quantity (WO Remaining {remaining:.2f})" if _act_rem_val is None else f"Quantity (WO Remaining {remaining:.2f} | Project Actual Remaining {_act_rem_val:.2f})"
+                        # Build a richer qty label with WO actual remaining if available
+                        _qty_lbl = f"Quantity (WO Remaining {remaining:.2f})" if (_wo_act_rem is None) else f"Quantity (WO Remaining {remaining:.2f} | WO Actual Remaining {_wo_act_rem:.2f})"
+                        approval_required = (qty > (_wo_act_rem if (_wo_act_rem is not None) else remaining))
                         is_new_item = False
                         approval_required = qty > remaining
                         approval_reason = "low_qty" if approval_required else ""
@@ -3391,6 +3436,20 @@ for i, tab_label in enumerate(visible_tabs):
                                   file_name="requirements_registry.csv", mime="text/csv", key="reg-dl")
 
                 st.markdown("### View / Print a Raised Requirement")
+                # If a single project filter is selected, show WO Remaining vs Actual Remaining for quick context
+                try:
+                    cur_proj_filters = st.session_state.get("reg-proj-pick", []) or []
+                    if isinstance(cur_proj_filters, list) and len(cur_proj_filters) == 1:
+                        proj_code_info = cur_proj_filters[0]
+                        proj_avail_rr = _actual_remaining_by_project(items_f)
+                        rowp_rr = proj_avail_rr[proj_avail_rr["Project_Key"] == proj_code_info]
+                        if not rowp_rr.empty:
+                            rem_wo_rr = float(rowp_rr.iloc[0]["Remaining_Qty_WO"])
+                            appr_q_rr = float(rowp_rr.iloc[0]["Approved_Req_Qty"])
+                            act_rem_rr = float(rowp_rr.iloc[0]["Actual_Remaining"])
+                            st.info(f"Project {proj_code_info}: Remaining (WO): {rem_wo_rr:,.2f}  |  Approved (requests): {appr_q_rr:,.2f}  |  Actual Remaining: {act_rem_rr:,.2f}")
+                except Exception:
+                    pass
                 render_registry_view_print_controls(st, df, st.session_state.company_meta)
 
                 if _user_is_master_admin() or _user_is_site_admin():
