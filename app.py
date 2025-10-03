@@ -1,4 +1,4 @@
-﻿# -*- coding: cp1252 -*-
+﻿# -*- coding: utf-8 -*-
 # wo_phase2_dashboard_sjcpl.py
 # SJCPL � Work Order Dashboard (Phase 1 + Phase 2) � Integrated Engine
 # Final, Complete, and Functional Version
