@@ -3495,6 +3495,7 @@ for i, tab_label in enumerate(visible_tabs):
                             sel_ref_m = st.selectbox("Select ref to modify", ["-"] + all_refs_rr, index=0, key="adm-mod-ref")
                             new_qty_m = st.number_input("New quantity", min_value=0.0, value=0.0, step=0.5, key="adm-mod-qty")
                             mod_comment_m = st.text_area("Comment (required)", key="adm-mod-cmt")
+                            email_vendor_on_modify = st.checkbox("Email vendor about this quantity change", value=False, key="adm-mod-email-vendor")
                             if st.button("Apply quantity change", key="adm-mod-apply"):
                                 if sel_ref_m == "-":
                                     st.warning("Pick a reference to modify.")
@@ -3504,11 +3505,30 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.error("Comment is required to modify quantity.")
                                 else:
                                     try:
+                                        # Fetch pre-update row to know vendor/description/old qty
+                                        pre = []
+                                        try:
+                                            pre = read_requirements_by_refs([sel_ref_m])
+                                        except Exception:
+                                            pre = []
                                         update_requirement_qty(sel_ref_m, float(new_qty_m), st.session_state.user.get("email","admin@sjcpl.local"), mod_comment_m)
                                         try:
                                             log_requirement_audit(sel_ref_m, "qty_update", None, str(new_qty_m), mod_comment_m, st.session_state.user.get("email"))
                                         except Exception:
                                             pass
+                                        # Optional vendor email
+                                        if email_vendor_on_modify and pre:
+                                            vendor_key = str(pre[0].get("vendor",""))
+                                            v_email = get_vendor_email(vendor_key)
+                                            if v_email:
+                                                desc = pre[0].get("description","")
+                                                subject = f"Request quantity updated - {pre[0].get('project_code','')}"
+                                                html_body = f"<div style='font-family:Arial,Helvetica,sans-serif;color:#222'>Quantity updated for ref {sel_ref_m}:<br/><b>{desc}</b><br/>New qty: {new_qty_m}</div>"
+                                                ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, None, None)
+                                                try:
+                                                    log_requirement_email(sel_ref_m, vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
+                                                except Exception:
+                                                    pass
                                         st.success("Quantity updated.")
                                         st.session_state.reqlog_df = read_reqlog_df()
                                         st.rerun()
@@ -3517,6 +3537,7 @@ for i, tab_label in enumerate(visible_tabs):
                         with right_m:
                             refs_cancel = st.multiselect("Select ref(s) to cancel", all_refs_rr, key="adm-cancel-refs")
                             cancel_comment = st.text_area("Cancellation comment (required)", key="adm-cancel-cmt")
+                            email_vendor_on_cancel = st.checkbox("Email vendor about cancellation", value=True, key="adm-cancel-email-vendor")
                             if st.button("Cancel selected ref(s)", key="adm-cancel-apply"):
                                 if not refs_cancel:
                                     st.warning("Pick at least one reference.")
@@ -3530,7 +3551,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         except Exception:
                                             pre_rows = []
                                         update_requirement_status(refs_cancel, "Cancelled", st.session_state.user.get("email","admin@sjcpl.local"), status_detail=cancel_comment)
-                                        if pre_rows:
+                                        if pre_rows and email_vendor_on_cancel:
                                             from collections import defaultdict
                                             by_vendor = defaultdict(list)
                                             for r in pre_rows:
@@ -3567,11 +3588,103 @@ for i, tab_label in enumerate(visible_tabs):
                                                         log_requirement_email(r.get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
                                                 except Exception:
                                                     pass
-                                        st.success("Cancelled and notified vendors where configured.")
+                                        st.success("Cancelled." + (" Vendor notified." if email_vendor_on_cancel else ""))
                                         st.session_state.reqlog_df = read_reqlog_df()
                                         st.rerun()
                                     except Exception as e:
                                         st.error(f"Cancel failed: {e}")
+
+                    # Manual Site-Group notification (processed by Subcontract team)
+                    with st.expander("Notify Site Group (manual)", expanded=False):
+                        refs_sg = st.multiselect("Select ref(s)", df["ref"].astype(str).tolist(), key="reg-sg-refs")
+                        sg_df = _site_groups_df()
+                        group_names = sorted(sg_df["group_name"].dropna().astype(str).unique().tolist()) if not sg_df.empty else []
+                        pick_groups = st.multiselect("Site Group(s)", group_names, key="reg-sg-pick")
+                        msg = st.text_area("Message", "Your request has been processed by the Subcontracts team. You may raise it now.", key="reg-sg-msg")
+                        if st.button("Send notification to selected group(s)", key="reg-sg-send"):
+                            if not refs_sg or not pick_groups:
+                                st.warning("Select at least one reference and one site group.")
+                            else:
+                                sg_map = {str(r.get("group_name")): str(r.get("emails","")) for _, r in sg_df.iterrows()} if not sg_df.empty else {}
+                                recipients = set()
+                                for g in pick_groups:
+                                    emails = sg_map.get(g, "")
+                                    for e in str(emails).split("|"):
+                                        e = e.strip()
+                                        if e:
+                                            recipients.add(e)
+                                if not recipients:
+                                    st.warning("No emails found for the selected group(s).")
+                                else:
+                                    subject = f"[SJCPL] Request processed - {len(refs_sg)} ref(s)"
+                                    body = f"<div style='font-family:Arial,Helvetica,sans-serif;color:#222'>{msg}<br/>Refs: {', '.join(refs_sg)}</div>"
+                                    ok, err = 0, []
+                                    for em in recipients:
+                                        ok_mail, msg_mail = send_email_via_smtp(em, subject, body, None, None)
+                                        if ok_mail:
+                                            ok += 1
+                                        else:
+                                            err.append(f"{em}: {msg_mail}")
+                                    if ok:
+                                        st.success(f"Sent to {ok} recipient(s).")
+                                    if err:
+                                        st.error("Some failed: " + "; ".join(err))
+
+                    # Check in Work Order and prepare raise
+                    with st.expander("Check in Work Order and prepare raise", expanded=False):
+                        ref_check = st.selectbox("Select ref", [""] + df["ref"].astype(str).tolist(), key="reg-wo-check-ref")
+                        qty_to_raise = st.number_input("Qty to prepare", min_value=0.0, value=0.0, step=1.0, key="reg-wo-check-qty")
+                        if st.button("Check & Add to cart", key="reg-wo-check-btn"):
+                            if not ref_check:
+                                st.warning("Pick a reference.")
+                            elif qty_to_raise <= 0:
+                                st.warning("Enter a positive quantity.")
+                            else:
+                                try:
+                                    rows = read_requirements_by_refs([ref_check])
+                                    if not rows:
+                                        st.error("Reference not found.")
+                                    else:
+                                        r = rows[0]
+                                        pc = str(r.get("project_code","")); wo_key = str(r.get("wo","")); lk = str(r.get("line_key",""))
+                                        # Find the matching line in current items_f
+                                        line = items_f[(items_f["Project_Key"].astype(str)==pc) & (items_f["WO_Key"].astype(str)==wo_key) & (items_f["Line_Key"].astype(str)==lk)]
+                                        if line.empty:
+                                            st.warning("Matching Work Order line not found in current dataset.")
+                                        else:
+                                            rem = float(line.iloc[0].get("Remaining_Qty", 0.0))
+                                            if rem <= 0:
+                                                st.warning("Work Order shows no remaining quantity on this line.")
+                                            else:
+                                                # Prepare cart entry
+                                                if "req_cart" not in st.session_state:
+                                                    st.session_state.req_cart = []
+                                                st.session_state.req_cart.append({
+                                                    "project_code": pc,
+                                                    "project_name": pc,
+                                                    "request_type": str(r.get("request_type","QCTest")),
+                                                    "vendor": str(r.get("vendor","")),
+                                                    "wo": wo_key,
+                                                    "line_key": lk,
+                                                    "uom": str(r.get("uom","")),
+                                                    "stage": str(r.get("stage","")),
+                                                    "description": str(r.get("description","")),
+                                                    "qty": float(qty_to_raise),
+                                                    "date_casting": "",
+                                                    "date_testing": "",
+                                                    "remarks": f"Prepared from ref {ref_check}",
+                                                    "lot_number": "",
+                                                    "make": "",
+                                                    "material_quantity": "",
+                                                    "manufacturer": "",
+                                                    "remaining_at_request": rem,
+                                                    "is_new_item": False,
+                                                    "approval_required": float(qty_to_raise) > rem,
+                                                    "approval_reason": "low_qty" if float(qty_to_raise) > rem else "",
+                                                })
+                                                st.success("Added to request cart. Go to 'Raise Requirement' tab to finalize.")
+                                except Exception as e:
+                                    st.error(f"Check failed: {e}")
 
                     if _user_can_approve():
                         st.markdown("### Approval Actions")
@@ -3947,10 +4060,28 @@ for i, tab_label in enumerate(visible_tabs):
                                     st.session_state["site-group-extra"] = ""
                                     st.session_state["site-group-emails"] = ""
                                     st.success("Site group deleted.")
-                                    st.rerun()
+                                except Exception as e:                                     st.error(f"Delete failed: {e}")
+                # Force Reset User Password (master admin only)
+                if _user_is_master_admin():
+                    with st.expander("Force Reset User Password", expanded=False):
+                        st.caption("Master admin can reset any user\s password immediately.")
+                        try:
+                            users_df = st.session_state.acl_df.copy()
+                            emails = sorted(users_df["email"].dropna().astype(str).unique().tolist()) if not users_df.empty else []
+                        except Exception:
+                            emails = []
+                        sel_user = st.selectbox("User email", [""] + emails, key="force-reset-email")
+                        new_pwd = st.text_input("New password", type="password", key="force-reset-new")
+                        if st.button("Reset password", key="force-reset-btn"): 
+                            if not sel_user or not new_pwd:
+                                st.warning("Select user and enter a new password.")
+                            else:
+                                try:
+                                    ph = _sha256_hex(new_pwd)
+                                    update_user_password_hash(sel_user, ph)
+                                    st.success("Password reset.")
                                 except Exception as e:
-                                    st.error(f"Delete failed: {e}")
-                        else:
+                                    st.error(f"Reset failed: {e}")
                             st.write("")
 
                 with st.expander("?? Subcontract Team Notifications", expanded=False):
