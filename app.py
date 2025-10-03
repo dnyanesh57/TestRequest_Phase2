@@ -3363,6 +3363,92 @@ for i, tab_label in enumerate(visible_tabs):
                         company_meta=st.session_state.company_meta,
                         save_cb=lambda dfu: (write_reqlog_df(dfu), setattr(st.session_state, "reqlog_df", dfu)))
 
+                    # Modify / Cancel (admin-only)
+                    with st.expander("Modify quantity / Cancel request (admin only)", expanded=False):
+                        all_refs_rr = df["ref"].astype(str).tolist()
+                        left_m, right_m = st.columns([2,2])
+                        with left_m:
+                            sel_ref_m = st.selectbox("Select ref to modify", ["-"] + all_refs_rr, index=0, key="adm-mod-ref")
+                            new_qty_m = st.number_input("New quantity", min_value=0.0, value=0.0, step=0.5, key="adm-mod-qty")
+                            mod_comment_m = st.text_area("Comment (required)", key="adm-mod-cmt")
+                            if st.button("Apply quantity change", key="adm-mod-apply"):
+                                if sel_ref_m == "-":
+                                    st.warning("Pick a reference to modify.")
+                                elif new_qty_m <= 0:
+                                    st.warning("Enter a positive new quantity.")
+                                elif not mod_comment_m.strip():
+                                    st.error("Comment is required to modify quantity.")
+                                else:
+                                    try:
+                                        update_requirement_qty(sel_ref_m, float(new_qty_m), st.session_state.user.get("email","admin@sjcpl.local"), mod_comment_m)
+                                        try:
+                                            log_requirement_audit(sel_ref_m, "qty_update", None, str(new_qty_m), mod_comment_m, st.session_state.user.get("email"))
+                                        except Exception:
+                                            pass
+                                        st.success("Quantity updated.")
+                                        st.session_state.reqlog_df = read_reqlog_df()
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Update failed: {e}")
+                        with right_m:
+                            refs_cancel = st.multiselect("Select ref(s) to cancel", all_refs_rr, key="adm-cancel-refs")
+                            cancel_comment = st.text_area("Cancellation comment (required)", key="adm-cancel-cmt")
+                            if st.button("Cancel selected ref(s)", key="adm-cancel-apply"):
+                                if not refs_cancel:
+                                    st.warning("Pick at least one reference.")
+                                elif not cancel_comment.strip():
+                                    st.error("Comment is required to cancel.")
+                                else:
+                                    try:
+                                        pre_rows = []
+                                        try:
+                                            pre_rows = read_requirements_by_refs(refs_cancel)
+                                        except Exception:
+                                            pre_rows = []
+                                        update_requirement_status(refs_cancel, "Cancelled", st.session_state.user.get("email","admin@sjcpl.local"), status_detail=cancel_comment)
+                                        if pre_rows:
+                                            from collections import defaultdict
+                                            by_vendor = defaultdict(list)
+                                            for r in pre_rows:
+                                                by_vendor[str(r.get("vendor",""))].append(r)
+                                                try:
+                                                    log_requirement_audit(str(r.get("ref","")), "cancel", str(r.get("status","")), "Cancelled", cancel_comment, st.session_state.user.get("email"))
+                                                except Exception:
+                                                    pass
+                                            for vendor_key, bucket in by_vendor.items():
+                                                v_email = get_vendor_email(vendor_key)
+                                                if not v_email:
+                                                    continue
+                                                site_name = bucket[0].get('project_name') or bucket[0].get('project_code','')
+                                                body_rows = "".join(
+                                                    f"<tr><td style='padding:4px 8px'>{r.get('ref','')}</td>"
+                                                    f"<td style='padding:4px 8px'>{r.get('description','')}</td>"
+                                                    f"<td style='padding:4px 8px'>{r.get('qty','')} {r.get('uom','')}</td></tr>"
+                                                    for r in bucket
+                                                )
+                                                html_body = f"""
+                                                <div style='font-family:Arial,Helvetica,sans-serif;color:#222'>
+                                                  <p>The following request(s) have been <b>Cancelled</b> by admin:</p>
+                                                  <table style='border-collapse:collapse;font-size:13px'>
+                                                    <thead><tr style='background:#f0f0f0'><th style='padding:4px 8px;text-align:left'>Ref</th><th style='padding:4px 8px;text-align:left'>Item</th><th style='padding:4px 8px;text-align:left'>Qty</th></tr></thead>
+                                                    <tbody>{body_rows}</tbody>
+                                                  </table>
+                                                  <p><b>Reason:</b> {cancel_comment}</p>
+                                                </div>
+                                                """
+                                                subject = f"Request Cancelled ({site_name})"
+                                                ok_mail, msg_mail = send_email_via_smtp(v_email, subject, html_body, None, None)
+                                                try:
+                                                    for r in bucket:
+                                                        log_requirement_email(r.get("ref",""), vendor_key, v_email, subject, ok_mail, (None if ok_mail else msg_mail))
+                                                except Exception:
+                                                    pass
+                                        st.success("Cancelled and notified vendors where configured.")
+                                        st.session_state.reqlog_df = read_reqlog_df()
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Cancel failed: {e}")
+
                     st.markdown("### Approval Actions")
                     # Focus on items needing approval by default
                     df_admin = df.copy()
