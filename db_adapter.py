@@ -305,6 +305,36 @@ def read_requirements_by_refs(refs: list[str]) -> list[dict]:
             q = text("SELECT * FROM requirements_log WHERE ref = ANY(:refs)")
             rows = c.execute(q, {"refs": refs}).mappings().all()
         return [dict(r) for r in rows]
+
+def update_requirement_qty(ref: str, new_qty: float, modified_by: str, comment: str) -> None:
+    """Update the qty for a single requirement ref and append an audit note into status_detail.
+    The audit note is prefixed with [QTY_MOD] and includes old->new, who and when, and the supplied comment.
+    """
+    if not ref:
+        return
+    ts = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    with _conn() as c:
+        # fetch existing
+        qsel = text("SELECT qty, status_detail FROM requirements_log WHERE ref = :r")
+        row = c.execute(qsel, {"r": ref}).mappings().first()
+        if not row:
+            return
+        old_qty = row["qty"]
+        det = row.get("status_detail") or ""
+        audit = f"[QTY_MOD {ts} by {modified_by}] {old_qty} -> {new_qty}. Reason: {comment.strip()}"
+        new_det = (det + ("\n" if det else "") + audit)[:2000]
+        qup = text("""
+            UPDATE requirements_log
+               SET qty = :q,
+                   status_detail = :d
+             WHERE ref = :r
+        """)
+        c.execute(qup, {"q": float(new_qty), "d": new_det, "r": ref})
+    # structured audit log
+    try:
+        log_requirement_audit(ref, "qty_update", str(old_qty), str(new_qty), comment, modified_by)
+    except Exception:
+        pass
 # -------------------- Existing API (unchanged logic) --------------------
 
 def df_read(sql: str, params: dict | None = None) -> pd.DataFrame: # type: ignore
@@ -461,6 +491,50 @@ def delete_site_group(group_name: str) -> None:
         raise ValueError("group_name required")
     with _conn() as c:
         c.execute(text("DELETE FROM site_groups WHERE lower(group_name) = lower(:name)"), {"name": name})
+
+# --- Requirement audit log (structured history) ---
+def ensure_requirement_audit_table() -> None:
+    """Create requirement_audit_log table if it doesn't exist."""
+    with _conn() as c:
+        if DB_URL.startswith("sqlite"):
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirement_audit_log (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  ref TEXT NOT NULL,
+                  action TEXT NOT NULL,
+                  old_value TEXT,
+                  new_value TEXT,
+                  comment TEXT,
+                  actor TEXT,
+                  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_req_audit_ref ON requirement_audit_log(ref)"))
+        else:
+            c.execute(text("""
+                CREATE TABLE IF NOT EXISTS requirement_audit_log (
+                  id BIGSERIAL PRIMARY KEY,
+                  ref TEXT NOT NULL,
+                  action TEXT NOT NULL,
+                  old_value TEXT,
+                  new_value TEXT,
+                  comment TEXT,
+                  actor TEXT,
+                  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """))
+            c.execute(text("CREATE INDEX IF NOT EXISTS idx_req_audit_ref ON requirement_audit_log(ref)"))
+
+def log_requirement_audit(ref: str, action: str, old_value: str | None, new_value: str | None, comment: str | None, actor: str | None) -> None:
+    """Insert an audit row for a requirement reference."""
+    if not ref or not action:
+        return
+    ensure_requirement_audit_table()
+    with _conn() as c:
+        c.execute(text("""
+            INSERT INTO requirement_audit_log(ref, action, old_value, new_value, comment, actor)
+            VALUES (:r, :a, :ov, :nv, :cm, :ac)
+        """), {"r": ref, "a": action, "ov": old_value, "nv": new_value, "cm": (comment or ""), "ac": (actor or "")})
 
 def _clean_row_for_db(row: dict) -> dict:
     clean = {}
