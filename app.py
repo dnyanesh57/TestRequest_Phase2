@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 # wo_phase2_dashboard_sjcpl.py
 # SJCPL ? Work Order Dashboard (Phase 1 + Phase 2) ? Integrated Engine
 # Final, Complete, and Functional Version
@@ -3120,55 +3120,63 @@ for i, tab_label in enumerate(visible_tabs):
                             key="rq-desc",
                         )
                         remaining = float(row.get("Remaining_Qty", 0.0))
-                        # Compute line-level actual remaining: Remaining (this line) - Approved qty from Request Log for this line
+                        # Compute line-level actual remaining: WO Remaining (this line) − Approved/Auto Approved in Request Log for the same (project_code, wo, line_key)
                         try:
                             df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
-                            _appr_line = 0.0
+                            approved_for_line = 0.0
+                            matched_rows_preview = pd.DataFrame()
                             if df_req is not None and not df_req.empty:
                                 df_ok = df_req[df_req["status"].astype(str).isin(["Approved","Auto Approved"])].copy()
                                 if df_ok is not None and not df_ok.empty:
-                                    # Normalize keys to avoid type/space/case mismatches
-                                    def _norm_key(v):
+                                    # Normalize keys to avoid type/space mismatches
+                                    def _norm_line(v):
                                         try:
                                             fv = float(str(v).strip())
-                                            return str(int(fv)) if fv.is_integer() else str(v).strip()
+                                            return str(int(fv)) if fv.is_integer() else str(fv)
                                         except Exception:
                                             return str(v).strip()
                                     def _norm_str(v):
-                                        return str(v).strip().lower()
+                                        return str(v).strip()
 
                                     pc_sel = _norm_str(project_code)
                                     wo_sel = _norm_str(wo)
-                                    lk_sel = _norm_key(line_key)
+                                    lk_sel = _norm_line(line_key)
 
-                                    pc_col = df_ok.get("project_code", "").astype(str).str.strip().str.lower()
-                                    wo_series = df_ok["wo"] if "wo" in df_ok.columns else (df_ok["WO_Key"] if "WO_Key" in df_ok.columns else df_ok.get("wo", ""))
-                                    wo_col = wo_series.astype(str).str.strip().str.lower()
-                                    lk_series = df_ok["line_key"] if "line_key" in df_ok.columns else (df_ok["Line_Key"] if "Line_Key" in df_ok.columns else df_ok.get("line_key", ""))
-                                    lk_col = lk_series.apply(_norm_key)
-                                    qty_col = pd.to_numeric(df_ok.get("qty", 0), errors="coerce").fillna(0.0)
+                                    pc_col = df_ok["project_code"].astype(str).str.strip()
+                                    wo_col = df_ok["wo"].astype(str).str.strip()
+                                    lk_col = df_ok["line_key"].apply(_norm_line)
+                                    qty_col = pd.to_numeric(df_ok["qty"], errors="coerce").fillna(0.0)
 
                                     mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_col == lk_sel)
-                                    _appr_line = float(qty_col[mask].sum())
+                                    approved_for_line = float(qty_col[mask].sum())
+                                    if mask.any():
+                                        matched_rows_preview = df_ok.loc[mask, ["project_code","wo","line_key","description","qty"]].copy()
 
-                                    # Fallback: try matching on description text if line_key mapping differs
-                                    if _appr_line == 0.0 and ("description" in df_ok.columns):
+                                    # Fallback: match by description if line_key is unreliable
+                                    if approved_for_line == 0.0 and ("description" in df_ok.columns):
                                         try:
-                                            current_desc = str(source_desc).strip().lower()
-                                            desc_col = df_ok["description"].astype(str).str.strip().str.lower()
+                                            current_desc = str(source_desc).strip()
+                                            desc_col = df_ok["description"].astype(str).str.strip()
                                             mask2 = (pc_col == pc_sel) & (wo_col == wo_sel) & (desc_col == current_desc)
-                                            _appr_line = float(qty_col[mask2].sum())
+                                            approved_for_line = float(qty_col[mask2].sum())
+                                            if mask2.any() and matched_rows_preview.empty:
+                                                matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
                                         except Exception:
                                             pass
-
-                            _line_act_rem = max(0.0, float(remaining) - float(_appr_line))
                         except Exception:
-                            # Fallback to WO remaining if anything fails
-                            _line_act_rem = float(remaining)
-                        _qty_label = f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {_line_act_rem:.2f})"
-                        qty = st.number_input(_qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
+                            approved_for_line = 0.0
+                            matched_rows_preview = pd.DataFrame()
+                        line_actual_remaining = max(0.0, float(remaining) - approved_for_line)
+                        # Debug (optional): enable to verify matches
+                        if st.checkbox("Show line match debug (temporary)", key=f"rq-debug-{line_key}", value=False):
+                            st.write({"pc": pc_sel if 'pc_sel' in locals() else project_code, "wo": wo_sel if 'wo_sel' in locals() else wo, "lk": lk_sel if 'lk_sel' in locals() else line_key, "approved_for_line": approved_for_line})
+                            if not matched_rows_preview.empty:
+                                st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
+
+                        qty_label = f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {line_actual_remaining:.2f})"
+                        qty = st.number_input(qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
                         is_new_item = False
-                        approval_required = qty > (_line_act_rem if (_line_act_rem is not None) else remaining)
+                        approval_required = qty > line_actual_remaining
                         approval_reason = "low_qty" if approval_required else ""
                     else: # New item
                         line_key = "NEW"
