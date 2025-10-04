@@ -3120,39 +3120,37 @@ for i, tab_label in enumerate(visible_tabs):
                             key="rq-desc",
                         )
                         remaining = float(row.get("Remaining_Qty", 0.0))
-                        # Compute line-level actual remaining: WO Remaining (this line) − Approved/Auto Approved in Request Log for the same (project_code, wo, line_key)
+                        # Compute line-level actual remaining: WO Remaining (this line) − Approved/Auto Approved for the same (project_code, wo, line_key)
                         try:
                             df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
                             approved_for_line = 0.0
                             matched_rows_preview = pd.DataFrame()
-                            if df_req is not None and not df_req.empty:
-                                df_ok = df_req[df_req["status"].astype(str).isin(["Approved","Auto Approved"])].copy()
-                                if df_ok is not None and not df_ok.empty:
-                                    # Normalize keys to avoid type/space mismatches
-                                    def _norm_line(v):
-                                        try:
-                                            fv = float(str(v).strip())
-                                            return str(int(fv)) if fv.is_integer() else str(fv)
-                                        except Exception:
-                                            return str(v).strip()
-                                    def _norm_str(v):
-                                        return str(v).strip()
 
-                                    pc_sel = _norm_str(project_code)
-                                    wo_sel = _norm_str(wo)
-                                    lk_sel = _norm_line(line_key)
+                            if df_req is not None and not df_req.empty:
+                                df_ok = df_req[df_req["status"].astype(str).isin(["Approved", "Auto Approved"])].copy()
+                                if df_ok is not None and not df_ok.empty:
+                                    # Normalize project and wo (trim only)
+                                    pc_sel = str(project_code).strip()
+                                    wo_sel = str(wo).strip()
 
                                     pc_col = df_ok["project_code"].astype(str).str.strip()
                                     wo_col = df_ok["wo"].astype(str).str.strip()
-                                    lk_col = df_ok["line_key"].apply(_norm_line)
+
+                                    # Numeric compare for line_key to bridge '29' vs '29.0'
+                                    lk_num = pd.to_numeric(df_ok["line_key"], errors="coerce")
+                                    try:
+                                        line_target = float(str(line_key).strip())
+                                    except Exception:
+                                        line_target = None
+
                                     qty_col = pd.to_numeric(df_ok["qty"], errors="coerce").fillna(0.0)
 
-                                    mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_col == lk_sel)
+                                    mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_num == line_target)
                                     approved_for_line = float(qty_col[mask].sum())
                                     if mask.any():
                                         matched_rows_preview = df_ok.loc[mask, ["project_code","wo","line_key","description","qty"]].copy()
 
-                                    # Fallback: match by description if line_key is unreliable
+                                    # Fallback: if still 0, try matching by description (exact trimmed)
                                     if approved_for_line == 0.0 and ("description" in df_ok.columns):
                                         try:
                                             current_desc = str(source_desc).strip()
@@ -3163,13 +3161,14 @@ for i, tab_label in enumerate(visible_tabs):
                                                 matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
                                         except Exception:
                                             pass
+
+                            line_actual_remaining = max(0.0, float(remaining) - approved_for_line)
                         except Exception:
-                            approved_for_line = 0.0
-                            matched_rows_preview = pd.DataFrame()
-                        line_actual_remaining = max(0.0, float(remaining) - approved_for_line)
-                        # Debug (optional): enable to verify matches
+                            line_actual_remaining = float(remaining)
+
+                        # Debug (turn ON temporarily)
                         if st.checkbox("Show line match debug (temporary)", key=f"rq-debug-{line_key}", value=False):
-                            st.write({"pc": pc_sel if 'pc_sel' in locals() else project_code, "wo": wo_sel if 'wo_sel' in locals() else wo, "lk": lk_sel if 'lk_sel' in locals() else line_key, "approved_for_line": approved_for_line})
+                            st.write({"pc": pc_sel, "wo": wo_sel, "line_target": line_target, "approved_for_line": approved_for_line})
                             if not matched_rows_preview.empty:
                                 st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
 
