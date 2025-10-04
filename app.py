@@ -3122,10 +3122,20 @@ for i, tab_label in enumerate(visible_tabs):
                         remaining = float(row.get("Remaining_Qty", 0.0))
                         # Initialize defaults to avoid NameError in debug block
                         approved_for_line = 0.0
-                        pc_sel = None
-                        wo_sel = None
-                        line_target = None
                         matched_rows_preview = pd.DataFrame()
+                        # Derive selection context for debug regardless of data availability
+                        try:
+                            pc_sel = str(project_code).strip()
+                        except Exception:
+                            pc_sel = None
+                        try:
+                            wo_sel = str(wo).strip()
+                        except Exception:
+                            wo_sel = None
+                        try:
+                            line_target = float(str(line_key).strip())
+                        except Exception:
+                            line_target = None
                         # Compute line-level actual remaining: WO Remaining (this line) - Approved/Auto Approved for the same (project_code, wo, line_key)
                         try:
                             df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
