@@ -2594,7 +2594,9 @@ if "*" not in user_sites:
 # --- Helper: compute approved qty by project and actual remaining by project ---
 def _approved_qty_by_project() -> dict:
     try:
-        df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+        df_req = st.session_state.get("reqlog_df")
+        if not isinstance(df_req, pd.DataFrame) or df_req.empty:
+            df_req = read_reqlog_df()
     except Exception:
         return {}
     if df_req is None or getattr(df_req, 'empty', True):
@@ -2619,7 +2621,9 @@ def _actual_remaining_by_project(items: pd.DataFrame) -> pd.DataFrame:
 # --- Helper: compute approved qty by (project_code, wo) and WO-level actual remaining ---
 def _approved_qty_by_wo() -> dict[tuple[str, str], float]:
     try:
-        df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+        df_req = st.session_state.get("reqlog_df")
+        if not isinstance(df_req, pd.DataFrame) or df_req.empty:
+            df_req = read_reqlog_df()
     except Exception:
         return {}
     if df_req is None or getattr(df_req, 'empty', True):
@@ -3125,6 +3129,9 @@ for i, tab_label in enumerate(visible_tabs):
                         matched_rows_preview = pd.DataFrame()
                         near_rows_preview = pd.DataFrame()
                         n_approved_rows = 0
+                        reqlog_rows_total = 0
+                        reqlog_status_counts = {}
+                        db_backend = None
                         match_used = "none"
                         # Derive selection context for debug regardless of data availability
                         try:
@@ -3141,11 +3148,24 @@ for i, tab_label in enumerate(visible_tabs):
                             line_target = None
                         # Compute line-level actual remaining: WO Remaining (this line) - Approved/Auto Approved for the same (project_code, wo, line_key)
                         try:
-                            df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
+                            df_req = st.session_state.get("reqlog_df")
+                            if not isinstance(df_req, pd.DataFrame) or df_req.empty:
+                                df_req = read_reqlog_df()
                             approved_for_line = 0.0
                             matched_rows_preview = pd.DataFrame()
+                            try:
+                                from db_adapter import DB_URL as _DBG_DB_URL
+                                db_backend = "sqlite" if str(_DBG_DB_URL).startswith("sqlite") else ("postgres" if "postgres" in str(_DBG_DB_URL) else "other")
+                            except Exception:
+                                db_backend = None
 
                             if df_req is not None and not df_req.empty:
+                                try:
+                                    reqlog_rows_total = int(len(df_req))
+                                    if "status" in df_req.columns:
+                                        reqlog_status_counts = df_req["status"].astype(str).str.strip().str.lower().value_counts().to_dict()
+                                except Exception:
+                                    pass
                                 # Normalize status and filter Approved / Auto Approved (robust to spacing/case variants)
                                 s_col = df_req["status"].astype(str).str.strip().str.lower()
                                 df_ok = df_req[s_col.isin(["approved","auto approved","auto_approved","auto-approved"])].copy()
@@ -3251,11 +3271,17 @@ for i, tab_label in enumerate(visible_tabs):
                                     # If still nothing matched, provide a small preview of near-matches (same project + line; WO may differ)
                                     if approved_for_line == 0.0:
                                         try:
-                                            near_mask = (pc_key_col == pc_sel_key) & (lk_num == line_target)
-                                            if hasattr(near_mask, 'any') and near_mask.any():
-                                                cols = ["project_code","wo","line_key","description","qty","status"]
-                                                cols = [c for c in cols if c in df_ok.columns]
-                                                near_rows_preview = df_ok.loc[near_mask, cols].head(25).copy()
+                                            # Prefer using approved rows; if none, broaden to entire reqlog
+                                            df_base = df_ok if (isinstance(df_ok, pd.DataFrame) and not df_ok.empty) else df_req
+                                            if isinstance(df_base, pd.DataFrame) and not df_base.empty:
+                                                pc_col_b = df_base["project_code"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip().str.upper()
+                                                pc_key_col_b = pc_col_b.str.extract(r'^\s*([A-Z0-9]+)')[0].fillna(pc_col_b)
+                                                lk_num_b = pd.to_numeric(df_base["line_key"], errors="coerce")
+                                                near_mask = (pc_key_col_b == pc_sel_key) & (lk_num_b == line_target)
+                                                if hasattr(near_mask, 'any') and near_mask.any():
+                                                    cols = ["project_code","wo","line_key","description","qty","status"]
+                                                    cols = [c for c in cols if c in df_base.columns]
+                                                    near_rows_preview = df_base.loc[near_mask, cols].head(25).copy()
                                         except Exception:
                                             pass
 
@@ -3282,7 +3308,10 @@ for i, tab_label in enumerate(visible_tabs):
                                 "remaining": remaining,
                                 "line_actual_remaining": line_actual_remaining,
                                 "match_used": match_used,
-                                "approved_rows": n_approved_rows
+                                "approved_rows": n_approved_rows,
+                                "reqlog_rows": reqlog_rows_total,
+                                "reqlog_statuses": reqlog_status_counts,
+                                "db_backend": db_backend
                             })
                             if not matched_rows_preview.empty:
                                 st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
