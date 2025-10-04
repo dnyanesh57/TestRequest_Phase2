@@ -3123,6 +3123,7 @@ for i, tab_label in enumerate(visible_tabs):
                         # Initialize defaults to avoid NameError in debug block
                         approved_for_line = 0.0
                         matched_rows_preview = pd.DataFrame()
+                        match_used = "none"
                         # Derive selection context for debug regardless of data availability
                         try:
                             pc_sel = str(project_code).strip()
@@ -3170,6 +3171,8 @@ for i, tab_label in enumerate(visible_tabs):
                                     approved_for_line = float(qty_col[mask].sum())
                                     if mask.any():
                                         matched_rows_preview = df_ok.loc[mask, ["project_code","wo","line_key","description","qty"]].copy()
+                                        if approved_for_line > 0:
+                                            match_used = "exact_line"
                                     # Fallback: relax WO prefix (e.g., drop leading digits + slash)
                                     if approved_for_line == 0.0:
                                         wo_sel_key = pd.Series([wo_sel]).astype(str).str.replace(r'^[0-9]+/', '', regex=True).str.strip().iloc[0]
@@ -3177,6 +3180,7 @@ for i, tab_label in enumerate(visible_tabs):
                                         alt_sum = float(qty_col[mask_alt].sum())
                                         if alt_sum > 0:
                                             approved_for_line = alt_sum
+                                            match_used = "wo_relaxed_line"
                                             if mask_alt.any():
                                                 matched_rows_preview = df_ok.loc[mask_alt, ["project_code","wo","line_key","description","qty"]].copy()
 
@@ -3189,14 +3193,18 @@ for i, tab_label in enumerate(visible_tabs):
                                             if approved_for_line == 0.0 and not mask2.any():
                                                 # Try relaxed WO prefix for description match
                                                 mask2_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_key) & (desc_col == current_desc)
-                                            if mask2_alt.any():
-                                                approved_for_line = float(qty_col[mask2_alt].sum())
-                                                if matched_rows_preview.empty:
-                                                    matched_rows_preview = df_ok.loc[mask2_alt, ["project_code","wo","line_key","description","qty"]].copy()
+                                                if mask2_alt.any():
+                                                    approved_for_line = float(qty_col[mask2_alt].sum())
+                                                    if approved_for_line > 0:
+                                                        match_used = "wo_relaxed_desc"
+                                                    if matched_rows_preview.empty:
+                                                        matched_rows_preview = df_ok.loc[mask2_alt, ["project_code","wo","line_key","description","qty"]].copy()
                                             if approved_for_line == 0.0:
                                                 approved_for_line = float(qty_col[mask2].sum())
                                                 if mask2.any() and matched_rows_preview.empty:
                                                     matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
+                                                if approved_for_line > 0 and match_used == "none":
+                                                    match_used = "desc_exact"
                                         except Exception:
                                             pass
 
@@ -3205,13 +3213,29 @@ for i, tab_label in enumerate(visible_tabs):
                             approved_for_line = approved_for_line if 'approved_for_line' in locals() else 0.0
 
                         # Compute outside try so exceptions above don't mask the adjustment
-                        line_actual_remaining = max(0.0, float(remaining) - float(approved_for_line or 0.0))
+                        # Final calculation
+                        subtract_approved = True
+                        try:
+                            subtract_approved = bool(st.session_state.get("rq_subtract_approved", True))
+                        except Exception:
+                            subtract_approved = True
+                        line_actual_remaining = max(0.0, float(remaining) - (float(approved_for_line or 0.0) if subtract_approved else 0.0))
 
                         # Debug (turn ON temporarily)
                         if st.checkbox("Show line match debug (temporary)", key=f"rq-debug-{line_key}", value=False):
-                            st.write({"pc": pc_sel, "wo": wo_sel, "line_target": line_target, "approved_for_line": approved_for_line})
-                            if not matched_rows_preview.empty:
-                                st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
+                            st.write({
+                                "pc": pc_sel,
+                                "wo": wo_sel,
+                                "line_target": line_target,
+                                "approved_for_line": approved_for_line,
+                                "remaining": remaining,
+                                "line_actual_remaining": line_actual_remaining,
+                                "match_used": match_used
+                            })
+                        # User control: choose whether to subtract approved qty
+                        st.checkbox("Subtract approved requests from WO Remaining for line-level available qty", value=True, key="rq_subtract_approved")
+                        if not matched_rows_preview.empty:
+                            st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
 
                         qty_label = f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {line_actual_remaining:.2f})"
                         qty = st.number_input(qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
