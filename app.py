@@ -3123,6 +3123,8 @@ for i, tab_label in enumerate(visible_tabs):
                         # Initialize defaults to avoid NameError in debug block
                         approved_for_line = 0.0
                         matched_rows_preview = pd.DataFrame()
+                        near_rows_preview = pd.DataFrame()
+                        n_approved_rows = 0
                         match_used = "none"
                         # Derive selection context for debug regardless of data availability
                         try:
@@ -3144,19 +3146,43 @@ for i, tab_label in enumerate(visible_tabs):
                             matched_rows_preview = pd.DataFrame()
 
                             if df_req is not None and not df_req.empty:
-                                df_ok = df_req[df_req["status"].astype(str).isin(["Approved", "Auto Approved"])].copy()
+                                # Normalize status and filter Approved / Auto Approved (robust to spacing/case variants)
+                                s_col = df_req["status"].astype(str).str.strip().str.lower()
+                                df_ok = df_req[s_col.isin(["approved","auto approved","auto_approved","auto-approved"])].copy()
                                 if df_ok is not None and not df_ok.empty:
+                                    try:
+                                        n_approved_rows = int(len(df_ok))
+                                    except Exception:
+                                        n_approved_rows = 0
                                     # Normalize project and wo
                                     pc_sel = str(project_code).replace("\u00A0", " ").strip()
-                                    # Some datasets carry "CODE - NAME"; compare on left token only
-                                    pc_sel_key = pc_sel.split(" - ")[0].strip()
+                                    # Extract leading alphanumeric token as canonical project code (e.g., "01BOULE" from "01BOULE - ABIL BOULEVARD")
+                                    try:
+                                        m = re.match(r"\s*([A-Za-z0-9]+)", pc_sel)
+                                        pc_sel_key = (m.group(1) if m else pc_sel).upper()
+                                    except Exception:
+                                        pc_sel_key = str(pc_sel).upper()
                                     wo_sel = str(wo).replace("\u00A0", " ").strip()
+                                    wo_sel_norm = str(wo_sel).upper()
+                                    try:
+                                        wo_sel_no_num_prefix = re.sub(r'^\d+/', '', wo_sel_norm).strip()
+                                    except Exception:
+                                        wo_sel_no_num_prefix = wo_sel_norm
+                                    try:
+                                        wo_sel_tail3 = "/".join(wo_sel_norm.split("/")[-3:]) if wo_sel_norm else None
+                                    except Exception:
+                                        wo_sel_tail3 = None
 
-                                    pc_col = df_ok["project_code"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip()
-                                    pc_key_col = pc_col.str.split(" - ").str[0].str.strip()
-                                    wo_col = df_ok["wo"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip()
-                                    # Some WOs may carry a numeric prefix like "10/"; compare on suffix if needed
-                                    wo_key_col = wo_col.str.replace(r'^[0-9]+/', '', regex=True).str.strip()
+                                    pc_col_norm = df_ok["project_code"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip().str.upper()
+                                    pc_key_col = pc_col_norm.str.extract(r'^\s*([A-Z0-9]+)')[0].fillna(pc_col_norm)
+                                    wo_col_norm = df_ok["wo"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip().str.upper()
+                                    # Remove any leading numeric prefix like "10/"
+                                    wo_key_col = wo_col_norm.str.replace(r'^\d+/', '', regex=True).str.strip()
+                                    # Tail segments (last 3 components) as a relaxed comparator
+                                    try:
+                                        wo_tail3_col = wo_col_norm.str.split('/').apply(lambda x: '/'.join(x[-3:]) if isinstance(x, list) else x)
+                                    except Exception:
+                                        wo_tail3_col = wo_col_norm
 
                                     # Numeric compare for line_key to bridge '29' vs '29.0'
                                     lk_num = pd.to_numeric(df_ok["line_key"], errors="coerce")
@@ -3167,44 +3193,69 @@ for i, tab_label in enumerate(visible_tabs):
 
                                     qty_col = pd.to_numeric(df_ok["qty"], errors="coerce").fillna(0.0)
 
-                                    mask = (pc_key_col == pc_sel_key) & (wo_col == wo_sel) & (lk_num == line_target)
+                                    # Primary: exact WO match
+                                    mask = (pc_key_col == pc_sel_key) & (wo_col_norm == wo_sel_norm) & (lk_num == line_target)
                                     approved_for_line = float(qty_col[mask].sum())
-                                    if mask.any():
+                                    if mask.any() and approved_for_line > 0:
                                         matched_rows_preview = df_ok.loc[mask, ["project_code","wo","line_key","description","qty"]].copy()
-                                        if approved_for_line > 0:
-                                            match_used = "exact_line"
+                                        match_used = "exact_line"
                                     # Fallback: relax WO prefix (e.g., drop leading digits + slash)
                                     if approved_for_line == 0.0:
-                                        wo_sel_key = pd.Series([wo_sel]).astype(str).str.replace(r'^[0-9]+/', '', regex=True).str.strip().iloc[0]
-                                        mask_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_key) & (lk_num == line_target)
+                                        mask_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_no_num_prefix) & (lk_num == line_target)
                                         alt_sum = float(qty_col[mask_alt].sum())
                                         if alt_sum > 0:
                                             approved_for_line = alt_sum
                                             match_used = "wo_relaxed_line"
-                                            if mask_alt.any():
-                                                matched_rows_preview = df_ok.loc[mask_alt, ["project_code","wo","line_key","description","qty"]].copy()
+                                            matched_rows_preview = df_ok.loc[mask_alt, ["project_code","wo","line_key","description","qty"]].copy()
+                                    # Fallback: match by tail segments (last 3 components)
+                                    if approved_for_line == 0.0 and wo_sel_tail3:
+                                        mask_tail3 = (pc_key_col == pc_sel_key) & (wo_tail3_col == wo_sel_tail3) & (lk_num == line_target)
+                                        tail3_sum = float(qty_col[mask_tail3].sum())
+                                        if tail3_sum > 0:
+                                            approved_for_line = tail3_sum
+                                            match_used = "wo_tail3_line"
+                                            matched_rows_preview = df_ok.loc[mask_tail3, ["project_code","wo","line_key","description","qty"]].copy()
 
                                     # Fallback: if still 0, try matching by description (exact trimmed)
                                     if approved_for_line == 0.0 and ("description" in df_ok.columns):
                                         try:
                                             current_desc = str(source_desc).strip()
                                             desc_col = df_ok["description"].astype(str).str.strip()
-                                            mask2 = (pc_key_col == pc_sel_key) & (wo_col == wo_sel) & (desc_col == current_desc)
+                                            # Primary: exact WO + description
+                                            mask2 = (pc_key_col == pc_sel_key) & (wo_col_norm == wo_sel_norm) & (desc_col == current_desc)
                                             if approved_for_line == 0.0 and not mask2.any():
                                                 # Try relaxed WO prefix for description match
-                                                mask2_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_key) & (desc_col == current_desc)
+                                                mask2_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_no_num_prefix) & (desc_col == current_desc)
                                                 if mask2_alt.any():
                                                     approved_for_line = float(qty_col[mask2_alt].sum())
                                                     if approved_for_line > 0:
                                                         match_used = "wo_relaxed_desc"
                                                     if matched_rows_preview.empty:
                                                         matched_rows_preview = df_ok.loc[mask2_alt, ["project_code","wo","line_key","description","qty"]].copy()
+                                            if approved_for_line == 0.0 and wo_sel_tail3:
+                                                mask2_tail3 = (pc_key_col == pc_sel_key) & (wo_tail3_col == wo_sel_tail3) & (desc_col == current_desc)
+                                                if mask2_tail3.any():
+                                                    approved_for_line = float(qty_col[mask2_tail3].sum())
+                                                    if approved_for_line > 0:
+                                                        match_used = "wo_tail3_desc"
+                                                    if matched_rows_preview.empty:
+                                                        matched_rows_preview = df_ok.loc[mask2_tail3, ["project_code","wo","line_key","description","qty"]].copy()
                                             if approved_for_line == 0.0:
                                                 approved_for_line = float(qty_col[mask2].sum())
                                                 if mask2.any() and matched_rows_preview.empty:
                                                     matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
                                                 if approved_for_line > 0 and match_used == "none":
                                                     match_used = "desc_exact"
+                                        except Exception:
+                                            pass
+                                    # If still nothing matched, provide a small preview of near-matches (same project + line; WO may differ)
+                                    if approved_for_line == 0.0:
+                                        try:
+                                            near_mask = (pc_key_col == pc_sel_key) & (lk_num == line_target)
+                                            if hasattr(near_mask, 'any') and near_mask.any():
+                                                cols = ["project_code","wo","line_key","description","qty","status"]
+                                                cols = [c for c in cols if c in df_ok.columns]
+                                                near_rows_preview = df_ok.loc[near_mask, cols].head(25).copy()
                                         except Exception:
                                             pass
 
@@ -3230,12 +3281,16 @@ for i, tab_label in enumerate(visible_tabs):
                                 "approved_for_line": approved_for_line,
                                 "remaining": remaining,
                                 "line_actual_remaining": line_actual_remaining,
-                                "match_used": match_used
+                                "match_used": match_used,
+                                "approved_rows": n_approved_rows
                             })
+                            if not matched_rows_preview.empty:
+                                st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
+                            elif not near_rows_preview.empty:
+                                st.caption("Nearby rows (same project + line; WO variants may differ):")
+                                st.dataframe(near_rows_preview, use_container_width=True, hide_index=True)
                         # User control: choose whether to subtract approved qty
                         st.checkbox("Subtract approved requests from WO Remaining for line-level available qty", value=True, key="rq_subtract_approved")
-                        if not matched_rows_preview.empty:
-                            st.dataframe(matched_rows_preview, use_container_width=True, hide_index=True)
 
                         qty_label = f"Quantity (WO Remaining {remaining:.2f} | Line Actual Remaining {line_actual_remaining:.2f})"
                         qty = st.number_input(qty_label, min_value=0.0, value=0.0, step=1.0, key="rq-qty")
