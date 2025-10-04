@@ -3145,12 +3145,17 @@ for i, tab_label in enumerate(visible_tabs):
                             if df_req is not None and not df_req.empty:
                                 df_ok = df_req[df_req["status"].astype(str).isin(["Approved", "Auto Approved"])].copy()
                                 if df_ok is not None and not df_ok.empty:
-                                    # Normalize project and wo (trim only)
-                                    pc_sel = str(project_code).strip()
-                                    wo_sel = str(wo).strip()
+                                    # Normalize project and wo
+                                    pc_sel = str(project_code).replace("\u00A0", " ").strip()
+                                    # Some datasets carry "CODE - NAME"; compare on left token only
+                                    pc_sel_key = pc_sel.split(" - ")[0].strip()
+                                    wo_sel = str(wo).replace("\u00A0", " ").strip()
 
-                                    pc_col = df_ok["project_code"].astype(str).str.strip()
-                                    wo_col = df_ok["wo"].astype(str).str.strip()
+                                    pc_col = df_ok["project_code"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip()
+                                    pc_key_col = pc_col.str.split(" - ").str[0].str.strip()
+                                    wo_col = df_ok["wo"].astype(str).str.replace("\u00A0", " ", regex=False).str.strip()
+                                    # Some WOs may carry a numeric prefix like "10/"; compare on suffix if needed
+                                    wo_key_col = wo_col.str.replace(r'^[0-9]+/', '', regex=True).str.strip()
 
                                     # Numeric compare for line_key to bridge '29' vs '29.0'
                                     lk_num = pd.to_numeric(df_ok["line_key"], errors="coerce")
@@ -3161,17 +3166,33 @@ for i, tab_label in enumerate(visible_tabs):
 
                                     qty_col = pd.to_numeric(df_ok["qty"], errors="coerce").fillna(0.0)
 
-                                    mask = (pc_col == pc_sel) & (wo_col == wo_sel) & (lk_num == line_target)
+                                    mask = (pc_key_col == pc_sel_key) & (wo_col == wo_sel) & (lk_num == line_target)
                                     approved_for_line = float(qty_col[mask].sum())
                                     if mask.any():
                                         matched_rows_preview = df_ok.loc[mask, ["project_code","wo","line_key","description","qty"]].copy()
+                                    # Fallback: relax WO prefix (e.g., drop leading digits + slash)
+                                    if approved_for_line == 0.0:
+                                        wo_sel_key = pd.Series([wo_sel]).astype(str).str.replace(r'^[0-9]+/', '', regex=True).str.strip().iloc[0]
+                                        mask_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_key) & (lk_num == line_target)
+                                        alt_sum = float(qty_col[mask_alt].sum())
+                                        if alt_sum > 0:
+                                            approved_for_line = alt_sum
+                                            if mask_alt.any():
+                                                matched_rows_preview = df_ok.loc[mask_alt, ["project_code","wo","line_key","description","qty"]].copy()
 
                                     # Fallback: if still 0, try matching by description (exact trimmed)
                                     if approved_for_line == 0.0 and ("description" in df_ok.columns):
                                         try:
                                             current_desc = str(source_desc).strip()
                                             desc_col = df_ok["description"].astype(str).str.strip()
-                                            mask2 = (pc_col == pc_sel) & (wo_col == wo_sel) & (desc_col == current_desc)
+                                            mask2 = (pc_key_col == pc_sel_key) & (wo_col == wo_sel) & (desc_col == current_desc)
+                                            if approved_for_line == 0.0 and not mask2.any():
+                                                # Try relaxed WO prefix for description match
+                                                mask2_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_key) & (desc_col == current_desc)
+                                                if mask2_alt.any():
+                                                    approved_for_line = float(qty_col[mask2_alt].sum())
+                                                    if matched_rows_preview.empty:
+                                                        matched_rows_preview = df_ok.loc[mask2_alt, ["project_code","wo","line_key","description","qty"]].copy()
                                             approved_for_line = float(qty_col[mask2].sum())
                                             if mask2.any() and matched_rows_preview.empty:
                                                 matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
