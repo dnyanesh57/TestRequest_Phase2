@@ -3120,7 +3120,13 @@ for i, tab_label in enumerate(visible_tabs):
                             key="rq-desc",
                         )
                         remaining = float(row.get("Remaining_Qty", 0.0))
-                        # Compute line-level actual remaining: WO Remaining (this line) − Approved/Auto Approved for the same (project_code, wo, line_key)
+                        # Initialize defaults to avoid NameError in debug block
+                        approved_for_line = 0.0
+                        pc_sel = None
+                        wo_sel = None
+                        line_target = None
+                        matched_rows_preview = pd.DataFrame()
+                        # Compute line-level actual remaining: WO Remaining (this line) - Approved/Auto Approved for the same (project_code, wo, line_key)
                         try:
                             df_req = st.session_state.get("reqlog_df") or read_reqlog_df()
                             approved_for_line = 0.0
