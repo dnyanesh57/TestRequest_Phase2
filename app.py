@@ -3189,19 +3189,23 @@ for i, tab_label in enumerate(visible_tabs):
                                             if approved_for_line == 0.0 and not mask2.any():
                                                 # Try relaxed WO prefix for description match
                                                 mask2_alt = (pc_key_col == pc_sel_key) & (wo_key_col == wo_sel_key) & (desc_col == current_desc)
-                                                if mask2_alt.any():
-                                                    approved_for_line = float(qty_col[mask2_alt].sum())
-                                                    if matched_rows_preview.empty:
-                                                        matched_rows_preview = df_ok.loc[mask2_alt, ["project_code","wo","line_key","description","qty"]].copy()
-                                            approved_for_line = float(qty_col[mask2].sum())
-                                            if mask2.any() and matched_rows_preview.empty:
-                                                matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
+                                            if mask2_alt.any():
+                                                approved_for_line = float(qty_col[mask2_alt].sum())
+                                                if matched_rows_preview.empty:
+                                                    matched_rows_preview = df_ok.loc[mask2_alt, ["project_code","wo","line_key","description","qty"]].copy()
+                                            if approved_for_line == 0.0:
+                                                approved_for_line = float(qty_col[mask2].sum())
+                                                if mask2.any() and matched_rows_preview.empty:
+                                                    matched_rows_preview = df_ok.loc[mask2, ["project_code","wo","line_key","description","qty"]].copy()
                                         except Exception:
                                             pass
 
-                            line_actual_remaining = max(0.0, float(remaining) - approved_for_line)
                         except Exception:
-                            line_actual_remaining = float(remaining)
+                            # Leave approved_for_line at default (0.0) on any failure
+                            approved_for_line = approved_for_line if 'approved_for_line' in locals() else 0.0
+
+                        # Compute outside try so exceptions above don't mask the adjustment
+                        line_actual_remaining = max(0.0, float(remaining) - float(approved_for_line or 0.0))
 
                         # Debug (turn ON temporarily)
                         if st.checkbox("Show line match debug (temporary)", key=f"rq-debug-{line_key}", value=False):
